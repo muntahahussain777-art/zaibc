@@ -203,6 +203,12 @@
       <DesignTime>True</DesignTime>
       <DependentUpon>ExpenseDataset.xsd</DependentUpon>
     </Compile>
+    <Compile Include="Model\AhmedzaibC.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Model\AhmedzaibC.Designer.cs">
+      <DependentUpon>AhmedzaibC.cs</DependentUpon>
+    </Compile>
     <Compile Include="Model\CustomMessageForCLosing.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -278,6 +284,8 @@
     <Compile Include="Services\GeminiApiService.cs" />
     <Compile Include="Services\GeminiConfig.cs" />
     <Compile Include="Services\DatabaseSchemaManager.cs" />
+    <Compile Include="Services\StockPartyNameStore.cs" />
+    <Compile Include="Services\LocalAppStorage.cs" />
     <Compile Include="Services\AuditTrailService.cs" />
     <Compile Include="Services\RoleAccessService.cs" />
     <Compile Include="Services\FinancialReportService.cs" />
@@ -288,6 +296,8 @@
     <Compile Include="Services\GoogleDriveApiUploader.cs" />
     <Compile Include="Services\GoogleDriveBackupService.cs" />
     <Compile Include="Services\FormNavigationService.cs" />
+    <Compile Include="Services\NameSuggestHelper.cs" />
+    <Compile Include="Services\StockAssetsCalcEngine.cs" />
     <Compile Include="Services\SupabaseSyncService.cs" />
     <Compile Include="Services\LocalPersistence.cs" />
     <Compile Include="Services\SoftwareKnowledgeContext.cs" />
@@ -386,16 +396,22 @@
     <Compile Include="Model\frmDiselAdd.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Model\frmDiselAddVip.cs">
+      <DependentUpon>frmDiselAdd.cs</DependentUpon>
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Model\frmDiselAddDate.cs">
       <DependentUpon>frmDiselAdd.cs</DependentUpon>
+      <SubType>Form</SubType>
     </Compile>
     <Compile Include="Model\frmDiselAddCustomerCredit.cs">
       <DependentUpon>frmDiselAdd.cs</DependentUpon>
+      <SubType>Form</SubType>
     </Compile>
     <Compile Include="Model\frmDiselAdd.Designer.cs">
       <DependentUpon>frmDiselAdd.cs</DependentUpon>
     </Compile>
-        <Compile Include="Model\frmBulMalOwnerAdd.cs">
+    <Compile Include="Model\frmBulMalOwnerAdd.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Model\frmBulMalEntryAdd.cs">
@@ -413,6 +429,10 @@
     <Compile Include="Model\frmStockAdd.Designer.cs">
       <DependentUpon>frmStockAdd.cs</DependentUpon>
     </Compile>
+    <Compile Include="Model\frmStockAddVip.cs">
+      <DependentUpon>frmStockAdd.cs</DependentUpon>
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Model\frmStockAddMinus.cs">
       <DependentUpon>frmStockAdd.cs</DependentUpon>
       <SubType>Form</SubType>
@@ -424,8 +444,18 @@
       <DependentUpon>frmStockDieselAdd.cs</DependentUpon>
     </Compile>
     <Compile Include="Model\StockDieselLitterHelper.cs" />
+    <Compile Include="Model\frmStockAssetsCalc.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Model\frmStockDieselAddMinus.cs">
       <DependentUpon>frmStockDieselAdd.cs</DependentUpon>
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Model\frmStockDieselAddParty.cs">
+      <DependentUpon>frmStockDieselAdd.cs</DependentUpon>
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Model\frmStockPartyNames.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Model\YesOrNoMessage.cs">
@@ -545,6 +575,13 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="ReportForm\StockDieselReportHelper.cs" />
+    <Compile Include="ReportForm\VipLedgerReportHelper.cs" />
+    <Compile Include="ReportForm\frmVipLedgerReport.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="ReportForm\frmVipLedgerReport.Designer.cs">
+      <DependentUpon>frmVipLedgerReport.cs</DependentUpon>
+    </Compile>
     <Compile Include="ReportForm\frmStockDieselForm.Designer.cs">
       <DependentUpon>frmStockDieselForm.cs</DependentUpon>
     </Compile>
@@ -723,6 +760,7 @@
     <Compile Include="View\frmDashboard2.Designer.cs">
       <DependentUpon>frmDashboard2.cs</DependentUpon>
     </Compile>
+    <Compile Include="View\DealerGridBind.cs" />
     <Compile Include="View\frmDealerNameView.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -762,10 +800,18 @@
     <Compile Include="View\frmDiselView.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="View\frmDiselViewVip.cs">
+      <DependentUpon>frmDiselView.cs</DependentUpon>
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="View\frmDiselViewQuickAmount.cs">
+      <DependentUpon>frmDiselView.cs</DependentUpon>
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="View\frmDiselView.Designer.cs">
       <DependentUpon>frmDiselView.cs</DependentUpon>
     </Compile>
-        <Compile Include="View\frmBulMalView.cs">
+    <Compile Include="View\frmBulMalView.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="View\frmExpense.cs">
@@ -779,6 +825,10 @@
     </Compile>
     <Compile Include="View\frmStockDieselView.Designer.cs">
       <DependentUpon>frmStockDieselView.cs</DependentUpon>
+    </Compile>
+    <Compile Include="View\frmStockDieselViewParty.cs">
+      <DependentUpon>frmStockDieselView.cs</DependentUpon>
+      <SubType>Form</SubType>
     </Compile>
     <Compile Include="View\frmStockDieselViewMinus.cs">
       <DependentUpon>frmStockDieselView.cs</DependentUpon>
@@ -796,7 +846,19 @@
       <DependentUpon>frmStockDieselView.cs</DependentUpon>
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="View\frmStockDieselViewAssets.cs">
+      <DependentUpon>frmStockDieselView.cs</DependentUpon>
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="View\frmStockView.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="View\frmStockViewVip.cs">
+      <DependentUpon>frmStockView.cs</DependentUpon>
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="View\frmStockViewQuickAmount.cs">
+      <DependentUpon>frmStockView.cs</DependentUpon>
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="View\frmStockView.Designer.cs">
@@ -825,6 +887,9 @@
     </Compile>
     <EmbeddedResource Include="changepassword.resx">
       <DependentUpon>changepassword.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Model\AhmedzaibC.resx">
+      <DependentUpon>AhmedzaibC.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Model\CustomMessageForCLosing.resx">
       <DependentUpon>CustomMessageForCLosing.cs</DependentUpon>
@@ -1056,6 +1121,12 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Reports\LitterCompareDetailRDLC.rdlc">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Reports\StockPartyRoznamchaRDLC.rdlc">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Reports\VipInOutLedgerRDLC.rdlc">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </EmbeddedResource>
     <EmbeddedResource Include="Reports\StockDieselDetailRDLC.rdlc">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
@@ -1349,8 +1420,14 @@
   </ItemGroup>
   <ItemGroup />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <Target Name="CopyAppConfigToReleaseOutput" AfterTargets="Build" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <Copy SourceFiles="$(ProjectDir)App.config" DestinationFiles="$(TargetDir)$(TargetFileName).config" SkipUnchangedFiles="false" />
+    <!-- User runs MarriPetrleumService.exe — same build + Ahmed App.config overwrite -->
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(TargetDir)MarriPetrleumService.exe" SkipUnchangedFiles="false" OverwriteReadOnlyFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)App.config" DestinationFiles="$(TargetDir)MarriPetrleumService.exe.config" SkipUnchangedFiles="false" OverwriteReadOnlyFiles="true" />
+  </Target>
   <Target Name="VerifyReleaseBuildOutput" AfterTargets="Build" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
-    <Exec Command="powershell -NoProfile -Command &quot;if (-not (Test-Path '$(TargetPath)') -or (Get-Item '$(TargetPath)').Length -lt 2500000) { exit 1 }&quot;" IgnoreExitCode="true">
+    <Exec Command="powershell -NoProfile -Command &quot;if (-not (Test-Path '$(TargetPath)') -or (Get-Item '$(TargetPath)').Length -lt 2500000) { exit 1 }; if (-not (Test-Path '$(TargetDir)MarriPetrleumService.exe') -or (Get-Item '$(TargetDir)MarriPetrleumService.exe').Length -lt 2500000) { exit 1 }&quot;" IgnoreExitCode="true">
       <Output TaskParameter="ExitCode" PropertyName="VerifyReleaseExitCode" />
     </Exec>
     <Error Condition="'$(VerifyReleaseExitCode)' != '0'" Text="Release build incomplete. Close MarriPetrleumService.exe, then Rebuild Solution (Release | x64)." />

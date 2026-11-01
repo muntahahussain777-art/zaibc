@@ -31,6 +31,44 @@ namespace ZaibPetroleumService.Services
 
             EnsureColumn(connection, "BankTransactions", "BankName", "TEXT");
             EnsureColumn(connection, "tblUser", "uRole", "TEXT DEFAULT 'Admin'");
+            // Stock (StockDiesel) category — Type / Type2 / Type3 (VIP only; sync payload untouched)
+            EnsureColumn(connection, "StockDiesel", "StockType", "TEXT");
+            EnsureColumn(connection, "StockDiesel", "StockType2", "TEXT");
+            EnsureColumn(connection, "StockDiesel", "StockType3", "TEXT");
+
+            // Daily Diesel Sales VIP — Location / Item / Vehicle Model / InOut (local only; sync payload untouched)
+            EnsureColumn(connection, "PetrolAdd", "SaleLocation", "TEXT");
+            EnsureColumn(connection, "PetrolAdd", "SaleItem", "TEXT");
+            EnsureColumn(connection, "PetrolAdd", "SaleVehicleModel", "TEXT");
+            EnsureColumn(connection, "PetrolAdd", "SaleInOut", "TEXT");
+
+            // DealerAmount (AddStock) VIP — Credit / Amount / Location / Item / Vehicle Model / InOut (local; sync untouched)
+            EnsureColumn(connection, "AddStock", "Credit", "REAL DEFAULT 0");
+            EnsureColumn(connection, "AddStock", "Amount", "REAL DEFAULT 0");
+            EnsureColumn(connection, "AddStock", "SaleLocation", "TEXT");
+            EnsureColumn(connection, "AddStock", "SaleItem", "TEXT");
+            EnsureColumn(connection, "AddStock", "SaleVehicleModel", "TEXT");
+            EnsureColumn(connection, "AddStock", "SaleInOut", "TEXT");
+            // Purani entries → In (sirf blank/NULL; Amount/Credit/DDAmount touch nahi)
+            try
+            {
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText =
+                        "UPDATE AddStock SET SaleInOut='In' WHERE SaleInOut IS NULL OR TRIM(IFNULL(SaleInOut,''))=''";
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            catch { }
+
+            // Stock names — AddDealer se bilkul alag (SDid → StockPartyName.Pid)
+            EnsureTable(connection, "StockPartyName", @"
+                CREATE TABLE IF NOT EXISTS StockPartyName (
+                    Pid INTEGER PRIMARY KEY AUTOINCREMENT,
+                    PartyName TEXT NOT NULL,
+                    Date TEXT
+                );");
+            EnsureDefaultStockParty(connection, "RozNamcha");
 
             // Bul Mal — local only (sync whitelist mein NAHI)
             EnsureTable(connection, "BulMalOwner", @"
@@ -154,6 +192,28 @@ namespace ZaibPetroleumService.Services
             // Existing DB pe bhi Admin/Manager ko Bul Mal mil jaye (sync nahi)
             InsertPerm(connection, "Admin", "frmBulMalView", 1);
             InsertPerm(connection, "Manager", "frmBulMalView", 1);
+        }
+
+        private static void EnsureDefaultStockParty(SQLiteConnection connection, string partyName)
+        {
+            if (string.IsNullOrWhiteSpace(partyName)) return;
+            using (SQLiteCommand find = new SQLiteCommand(
+                "SELECT Pid FROM StockPartyName WHERE TRIM(IFNULL(PartyName,'')) = @n COLLATE NOCASE LIMIT 1",
+                connection))
+            {
+                find.Parameters.AddWithValue("@n", partyName.Trim());
+                object found = find.ExecuteScalar();
+                if (found != null && found != DBNull.Value)
+                    return;
+            }
+
+            using (SQLiteCommand ins = new SQLiteCommand(
+                "INSERT INTO StockPartyName (PartyName, Date) VALUES (@name, @date)", connection))
+            {
+                ins.Parameters.AddWithValue("@name", partyName.Trim());
+                ins.Parameters.AddWithValue("@date", DateTime.Now.ToString("yyyy-MM-dd"));
+                ins.ExecuteNonQuery();
+            }
         }
 
         private static void InsertPerm(SQLiteConnection connection, string role, string formKey, int canAccess)

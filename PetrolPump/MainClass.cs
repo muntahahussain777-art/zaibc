@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Data.SqlClient;
@@ -175,7 +175,7 @@ namespace ZaibPetroleumService
             DataTable dt = new DataTable();
             try
             {
-                using (SQLiteConnection con = new SQLiteConnection(con_string))
+                using (SQLiteConnection con = new SQLiteConnection(projectconnection.conReturn()))
                 {
                     using (SQLiteCommand cmd = new SQLiteCommand(query, con))
                     {
@@ -221,8 +221,8 @@ namespace ZaibPetroleumService
             int res = 0;
             try
             {
-                // Dedicated connection — shared `con` races / half-open state avoid
-                using (var connection = new SQLiteConnection(con_string))
+                // Always live App.config DB path (stale con_string avoid)
+                using (var connection = new SQLiteConnection(projectconnection.conReturn()))
                 {
                     connection.Open();
                     using (var cmd = new SQLiteCommand(qry, connection))

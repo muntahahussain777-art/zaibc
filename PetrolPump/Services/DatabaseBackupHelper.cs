@@ -8,10 +8,7 @@ namespace ZaibPetroleumService.Services
     {
         public static string GetDatabaseFilePath()
         {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "DiselPetrolPump",
-                "DiselPetrolPump.db");
+            return LocalAppStorage.GetDatabaseFilePath();
         }
 
         public static void CreateSqliteBackup(string backupFilePath)

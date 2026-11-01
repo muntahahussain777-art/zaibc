@@ -36,7 +36,8 @@ namespace HajiBalochSoftwere.ReportForm
 
         private void LoadAllRecords()
         {
-            BindReport(BuildSql(includeDealerToDealer: true, withFilter: false), null, null, null);
+            // DealerToDealer feature removed — reports mein bhi include nahi
+            BindReport(BuildSql(includeDealerToDealer: false, withFilter: false), null, null, null);
         }
 
         private void btnSearch_Click(object sender, EventArgs e)
@@ -51,7 +52,7 @@ namespace HajiBalochSoftwere.ReportForm
                     return;
                 }
 
-                BindReport(BuildSql(includeDealerToDealer: true, withFilter: true), searchText, fromdate, todate);
+                BindReport(BuildSql(includeDealerToDealer: false, withFilter: true), searchText, fromdate, todate);
             }
             catch (Exception ex)
             {

@@ -87,8 +87,7 @@ namespace ZaibPetroleumService.Services
     public static class GroqConfig
     {
         private static readonly string ExtraKeysFile = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DiselPetrolPump", "groq_keys.txt");
+            LocalAppStorage.GetLocalDataDirectory(), "groq_keys.txt");
 
         // Groq models change — preferred + fallbacks
         private static readonly string[] DefaultModels =
@@ -168,8 +167,7 @@ namespace ZaibPetroleumService.Services
     public static class AiProviderSettings
     {
         private static readonly string ProviderFile = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DiselPetrolPump", "ai_provider.txt");
+            LocalAppStorage.GetLocalDataDirectory(), "ai_provider.txt");
 
         private static AiProviderType? _cached;
 

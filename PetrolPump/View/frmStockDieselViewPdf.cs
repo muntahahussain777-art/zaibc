@@ -97,7 +97,7 @@ namespace ZaibPetroleumService.View
             string qry = @"
 SELECT StockDiesel.SID,
        StockDiesel.Date,
-       IFNULL(AddDealer.DealerName, '') AS DealerName,
+       IFNULL(StockPartyName.PartyName, '') AS DealerName,
        IFNULL(StockDiesel.Vehicle, '') AS Vehicle,
        IFNULL(StockDiesel.Rate, 0) AS Rate,
        IFNULL(StockDiesel.Litter, 0) AS Litter,
@@ -105,12 +105,12 @@ SELECT StockDiesel.SID,
        IFNULL(StockDiesel.Debit, 0) AS Debit,
        IFNULL(StockDiesel.Note, '') AS Note
 FROM StockDiesel
-LEFT JOIN AddDealer ON StockDiesel.SDid = AddDealer.Did
+LEFT JOIN StockPartyName ON StockDiesel.SDid = StockPartyName.Pid
 WHERE date(StockDiesel.Date) >= date(@StartDate)
   AND date(StockDiesel.Date) <= date(@EndDate)
   AND (
         @Search = ''
-        OR IFNULL(AddDealer.DealerName, '') LIKE @SearchLike
+        OR IFNULL(StockPartyName.PartyName, '') LIKE @SearchLike
         OR IFNULL(StockDiesel.Vehicle, '') LIKE @SearchLike
       )
 ORDER BY StockDiesel.Date ASC, StockDiesel.SID ASC";

@@ -13,9 +13,11 @@ namespace ZaibPetroleumService.Model
         private List<string> existingCustomerNames = new List<string>();
         public int id = 0;
         private decimal TotalBalance = 0;
-        private bool _blockSaveCreditRow; // credit entry sale form pe edit nahi
         private bool _loadingData; // LoadData ke dauran recalc Amount mat mitao
         private bool _syncingFields; // Amount/Balance sync loop rokne ke liye
+        private string _lastAppliedVehicle = "";
+        private bool _namePickedByUser; // user ne Name khud select kiya
+        private bool _suppressNameChange; // programmatic Name clear/set
 
         public frmDiselAdd()
         {
@@ -48,6 +50,7 @@ namespace ZaibPetroleumService.Model
         {
             try
             {
+                ApplyDailyVipMode();
                 LoadCustomers();
 
                 if (id > 0)
@@ -57,6 +60,9 @@ namespace ZaibPetroleumService.Model
                 else
                 {
                     txtdate.Value = DateTime.Now;
+                    ClearCustomerNameSelection();
+                    _namePickedByUser = false;
+                    _lastAppliedVehicle = "";
                 }
                 txtbalance.TextChanged += new EventHandler(txtbalance_TextChanged);
                 txtamount.TextChanged += new EventHandler(txtamount_TextChanged);
@@ -64,6 +70,28 @@ namespace ZaibPetroleumService.Model
                 txtcredit.TextChanged += new EventHandler(txtcredit_TextChanged);
                 txtamount.Leave += (s, ev) => SyncBalanceFromAmount();
                 txtbalance.Leave += (s, ev) => SyncBalanceFromAmount(); // alag type kiya ho to Amount se wapas sync
+
+                // Amount click/focus → In; Credit type → Out (vehicle pe In/Out free)
+                txtamount.Click += (s, ev) => { try { AutoInWhenAmountFocus(); } catch { } };
+                txtamount.Enter += (s, ev) => { try { AutoInWhenAmountFocus(); } catch { } };
+                txtcredit.Click += (s, ev) =>
+                {
+                    try
+                    {
+                        decimal.TryParse((txtcredit.Text ?? "").Replace(",", "").Trim(), out decimal c);
+                        if (c > 0) AutoOutWhenCreditEntered(c);
+                    }
+                    catch { }
+                };
+                txtcredit.Enter += (s, ev) =>
+                {
+                    try
+                    {
+                        decimal.TryParse((txtcredit.Text ?? "").Replace(",", "").Trim(), out decimal c);
+                        if (c > 0) AutoOutWhenCreditEntered(c);
+                    }
+                    catch { }
+                };
 
                 SetupCustomerCreditDisplay();
                 RefreshCustomerCreditDisplay();
@@ -80,15 +108,17 @@ namespace ZaibPetroleumService.Model
                 errorMessage.ShowDialog();
             }
         }
-        // Enter dabao to bhi suggest chale
+        // Enter / Tab: vehicle apply → seedha Amount (phir Tab se Credit)
         private void txtVehicle_KeyDown(object sender, KeyEventArgs e)
         {
             try
             {
-                if (e.KeyCode == Keys.Enter)
+                if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Tab)
                 {
                     e.SuppressKeyPress = true;
-                    SuggestCustomerByVehicle();
+                    e.Handled = true;
+                    ApplyVehicleEntry(force: true);
+                    FocusDailyVipAfterVehicle();
                 }
             }
             catch (Exception ex)
@@ -98,12 +128,12 @@ namespace ZaibPetroleumService.Model
             }
         }
 
-        // Focus chhorne par bhi suggest kare
+        // Leave: empty/changed vehicle pe apply; same vehicle + Name already picked → Name mat chhoo
         private void txtVehicle_Leave(object sender, EventArgs e)
         {
             try
             {
-                SuggestCustomerByVehicle();
+                ApplyVehicleEntry(force: false);
             }
             catch (Exception ex)
             {
@@ -111,88 +141,163 @@ namespace ZaibPetroleumService.Model
                 errorMessage.ShowDialog();
             }
         }
+
         /// <summary>
-        /// txtVehicle mein jo vehicle number likha gaya hai,
-        /// us ke liye PetrolAdd history se sab se zyada use hone wala customer nikalta hai
-        /// aur cbName + txtName set kar deta hai.
+        /// Vehicle diya → sirf Location/Item/Model Roznamcha se.
+        /// Name bilkul change nahi — jo customer select hai wahi rehta hai (kisi bhi vehicle pe).
         /// </summary>
-        private void SuggestCustomerByVehicle()
+        private void ApplyVehicleEntry(bool force)
+        {
+            if (_loadingData || id > 0) return;
+
+            // Name snapshot — VIP suggest / clear se Name touch na ho
+            object keepNameId = null;
+            string keepNameText = "";
+            bool keepName = false;
+            try
+            {
+                if (cbName != null && cbName.SelectedValue != null && cbName.SelectedValue != DBNull.Value
+                    && !(cbName.SelectedValue is DataRowView)
+                    && int.TryParse(cbName.SelectedValue.ToString(), out int kid) && kid > 0)
+                {
+                    keepNameId = cbName.SelectedValue;
+                    keepNameText = (cbName.Text ?? "").Trim();
+                    keepName = true;
+                }
+                else if (txtName != null && !string.IsNullOrWhiteSpace(txtName.Text))
+                {
+                    keepNameText = txtName.Text.Trim();
+                    keepName = true;
+                }
+            }
+            catch { }
+
+            string vehicle = (txtVehicle.Text ?? "").Trim();
+
+            if (string.IsNullOrEmpty(vehicle))
+            {
+                try { ClearVipLocationItemModel(); } catch { }
+                _lastAppliedVehicle = "";
+                RestoreCustomerNameIfNeeded(keepName, keepNameId, keepNameText);
+                return;
+            }
+
+            bool vehicleChanged = !string.Equals(vehicle, _lastAppliedVehicle, StringComparison.OrdinalIgnoreCase);
+
+            // Same vehicle pe Leave/focus → kuch mat chhoo
+            if (!force && !vehicleChanged)
+                return;
+
+            // Name mat chhoo — sirf Location / Item / Vehicle Model
+            try { ClearVipLocationItemModel(); } catch { }
+            try { SuggestVipFromRoznamchaVehicle(); } catch { }
+            _lastAppliedVehicle = vehicle;
+            RestoreCustomerNameIfNeeded(keepName, keepNameId, keepNameText);
+        }
+
+        /// <summary>Vehicle apply ke baad Name wapas — select kiya hua customer stick rahe.</summary>
+        private void RestoreCustomerNameIfNeeded(bool keepName, object keepNameId, string keepNameText)
+        {
+            if (!keepName) return;
+            try
+            {
+                _suppressNameChange = true;
+                if (txtName != null && !string.IsNullOrEmpty(keepNameText))
+                    txtName.Text = keepNameText;
+                if (cbName != null && keepNameId != null)
+                {
+                    try { cbName.SelectedValue = keepNameId; }
+                    catch
+                    {
+                        try
+                        {
+                            int idx = cbName.FindStringExact(keepNameText ?? "");
+                            if (idx >= 0) cbName.SelectedIndex = idx;
+                        }
+                        catch { }
+                    }
+                }
+                _namePickedByUser = true;
+            }
+            catch { }
+            finally
+            {
+                _suppressNameChange = false;
+            }
+        }
+
+        private object BlankCustomerIdValue()
         {
             try
             {
-                string vehicle = (txtVehicle.Text ?? "").Trim();
-                if (string.IsNullOrEmpty(vehicle))
-                    return;
+                DataTable dt = cbName != null ? cbName.DataSource as DataTable : null;
+                if (dt != null && dt.Columns.Contains("Id"))
+                    return Convert.ChangeType(0, dt.Columns["Id"].DataType);
+            }
+            catch { }
+            return 0;
+        }
 
-                string qry = @"
-            SELECT 
-                p.CustomerId,
-                c.Name,
-                COUNT(*) AS UseCount
-            FROM PetrolAdd p
-            INNER JOIN AddCustomer c ON c.Id = p.CustomerId
-            WHERE TRIM(IFNULL(p.vehicle, '')) = @veh
-            GROUP BY p.CustomerId, c.Name
-            ORDER BY UseCount DESC
-            LIMIT 1;
-        ";
-
-                Hashtable ht = new Hashtable
+        private void ClearCustomerNameSelection()
         {
-            { "@veh", vehicle }
-        };
-
-                DataTable dt = MainClass.ExecuteSelectQuery(qry, ht);
-
-                if (dt != null && dt.Rows.Count > 0)
-                {
-                    // sab se zyada use hone wala customer
-                    int customerId = Convert.ToInt32(dt.Rows[0]["CustomerId"]);
-                    string customerName = dt.Rows[0]["Name"].ToString();
-
-                    // ComboBox select karo
-                    if (cbName.DataSource != null)
-                    {
-                        cbName.SelectedValue = customerId;
-                    }
-
-                    // Agar txtName mode use kar rahe ho (Ctrl+1), usme bhi naam dikhao
-                    txtName.Text = customerName;
-                }
-                else
-                {
-                    // koi history nahi mili to kuch force mat karo, sirf optional message:
-                    // CustomeMessage msg = new CustomeMessage("Is vehicle ke liye koi purana customer record nahi mila.", "Info");
-                    // msg.ShowDialog();
-                }
-            }
-            catch (Exception ex)
+            try
             {
-                ErrorFormMessage errorMessage = new ErrorFormMessage("Error (SuggestCustomerByVehicle): " + ex.Message, "Error");
-                errorMessage.ShowDialog();
+                _suppressNameChange = true;
+                if (txtName != null) txtName.Text = "";
+                if (cbName != null && cbName.DataSource != null)
+                {
+                    // DropDownList: blank row (Id=0) — type SQLite Int64 match
+                    try { cbName.SelectedValue = BlankCustomerIdValue(); }
+                    catch
+                    {
+                        try { cbName.SelectedIndex = 0; } catch { }
+                    }
+                }
+                try { RefreshCustomerCreditDisplay(); } catch { }
             }
+            catch { }
+            finally
+            {
+                _suppressNameChange = false;
+            }
+        }
+
+        private static DataTable WithBlankCustomerRow(DataTable source)
+        {
+            DataTable dt = source != null ? source.Copy() : new DataTable();
+            if (!dt.Columns.Contains("Id"))
+                dt.Columns.Add("Id", typeof(long));
+            if (!dt.Columns.Contains("Name"))
+                dt.Columns.Add("Name", typeof(string));
+
+            DataRow blank = dt.NewRow();
+            blank["Id"] = Convert.ChangeType(0, dt.Columns["Id"].DataType);
+            blank["Name"] = "";
+            dt.Rows.InsertAt(blank, 0);
+            return dt;
         }
 
         private void LoadCustomers()
         {
             try
             {
-                string customerQry = "SELECT Id, Name FROM AddCustomer";
+                string customerQry = "SELECT Id, Name FROM AddCustomer ORDER BY Name COLLATE NOCASE";
                 DataTable customerData = MainClass.ExecuteSelectQuery(customerQry, null);
+                customerData = WithBlankCustomerRow(customerData);
 
-                if (customerData != null)
+                _suppressNameChange = true;
+                try
                 {
                     cbName.DisplayMember = "Name";
                     cbName.ValueMember = "Id";
                     cbName.DataSource = customerData;
+                    cbName.SelectedValue = BlankCustomerIdValue();
                 }
-                else
-                {
-                    cbName.DataSource = null;
-                }
+                finally { _suppressNameChange = false; }
             }
             catch (Exception ex)
             {
+                _suppressNameChange = false;
                 ErrorFormMessage errorMessage = new ErrorFormMessage("Error (LoadCustomers): " + ex.Message, "Error");
                 errorMessage.ShowDialog();
             }
@@ -206,15 +311,13 @@ namespace ZaibPetroleumService.Model
                 {
                     if (e.KeyCode == Keys.D1)
                     {
-                        txtName.Visible = true;
-                        cbName.Visible = false;
-                        txtName.Focus();
+                        e.SuppressKeyPress = true;
+                        EnterDailyVipFastTextMode();
                     }
                     else if (e.KeyCode == Keys.D2)
                     {
-                        cbName.Visible = true;
-                        txtName.Visible = false;
-                        cbName.Focus();
+                        e.SuppressKeyPress = true;
+                        ExitDailyVipFastTextMode();
                     }
                     else if (e.KeyCode == Keys.S)
                     {
@@ -233,28 +336,38 @@ namespace ZaibPetroleumService.Model
         {
             try
             {
-                string query = "SELECT Id, Name FROM AddCustomer";
+                string query = "SELECT Id, Name FROM AddCustomer ORDER BY Name COLLATE NOCASE";
                 DataTable dt = MainClass.ExecuteSelectQuery(query, null);
+                dt = WithBlankCustomerRow(dt);
 
-                if (dt != null && dt.Rows.Count > 0)
+                if (dt.Rows.Count > 1)
                 {
-                    cbName.DataSource = dt;
-                    cbName.DisplayMember = "Name";
-                    cbName.ValueMember = "Id";
-                    cbName.DropDownHeight = 200;
-                    cbName.IntegralHeight = false;
+                    _suppressNameChange = true;
+                    try
+                    {
+                        cbName.DataSource = dt;
+                        cbName.DisplayMember = "Name";
+                        cbName.ValueMember = "Id";
+                        cbName.DropDownHeight = 200;
+                        cbName.IntegralHeight = false;
+                        cbName.SelectedValue = BlankCustomerIdValue();
+                    }
+                    finally { _suppressNameChange = false; }
 
                     AutoCompleteStringCollection customerNames = new AutoCompleteStringCollection();
                     foreach (DataRow row in dt.Rows)
                     {
-                        customerNames.Add(row["Name"].ToString());
+                        string n = Convert.ToString(row["Name"]) ?? "";
+                        if (!string.IsNullOrWhiteSpace(n))
+                            customerNames.Add(n);
                     }
 
                     txtName.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
                     txtName.AutoCompleteSource = AutoCompleteSource.CustomSource;
                     txtName.AutoCompleteCustomSource = customerNames;
 
-                    cbName.SelectedIndexChanged += new EventHandler(cbName_SelectedIndexChanged);
+                    cbName.SelectedIndexChanged -= cbName_SelectedIndexChanged;
+                    cbName.SelectedIndexChanged += cbName_SelectedIndexChanged;
                 }
                 else
                 {
@@ -266,6 +379,7 @@ namespace ZaibPetroleumService.Model
             }
             catch (Exception ex)
             {
+                _suppressNameChange = false;
                 ErrorFormMessage errorMessage = new ErrorFormMessage("Error (PopulateCustomerNames): " + ex.Message, "Error");
                 errorMessage.ShowDialog();
             }
@@ -275,31 +389,51 @@ namespace ZaibPetroleumService.Model
         {
             try
             {
-                // Agar txtName visible hai aur uska text cbName ke selected item se match karta hai, to validation skip karo
-                if (txtName.Visible && !string.IsNullOrWhiteSpace(txtName.Text) && cbName.Text == txtName.Text.Trim())
+                if (_suppressNameChange || _loadingData) return;
+
+                int selectedId = 0;
+                try
                 {
-                    return; // No validation message jab txtName se select ho raha hai
+                    if (cbName.SelectedValue != null && cbName.SelectedValue != DBNull.Value
+                        && !(cbName.SelectedValue is DataRowView))
+                        int.TryParse(cbName.SelectedValue.ToString(), out selectedId);
+                }
+                catch { selectedId = 0; }
+
+                // Blank row — Name empty state
+                if (selectedId <= 0)
+                {
+                    _namePickedByUser = false;
+                    try { RefreshCustomerCreditDisplay(); } catch { }
+                    return;
                 }
 
-                if (cbName.SelectedValue != null && cbName.SelectedValue != DBNull.Value)
+                // Agar txtName visible hai aur uska text cbName ke selected item se match karta hai
+                if (txtName.Visible && !string.IsNullOrWhiteSpace(txtName.Text) && cbName.Text == txtName.Text.Trim())
                 {
-                    if (!int.TryParse(cbName.SelectedValue.ToString(), out int customerId))
-                    {
-                        CustomeMessage warningMessage = new CustomeMessage("Selected value valid integer nahi hai!", "Warning");
-                        warningMessage.ShowDialog();
-                    }
+                    OnUserPickedCustomerName();
+                    return;
                 }
-                else if (cbName.SelectedIndex != -1) // Agar koi item select hua hai lekin value null hai
-                {
-                    CustomeMessage warningMessage = new CustomeMessage("Koi valid customer select nahi hua!", "Warning");
-                    warningMessage.ShowDialog();
-                }
+
+                OnUserPickedCustomerName();
             }
             catch (Exception ex)
             {
                 ErrorFormMessage errorMessage = new ErrorFormMessage("Error (cbName_SelectedIndexChanged): " + ex.Message, "Error");
                 errorMessage.ShowDialog();
             }
+        }
+
+        /// <summary>
+        /// Name user ne select kiya — vehicle ho ya na ho (Credit/Amount-only bhi).
+        /// Name stick rahe; Amount/Credit pe change nahi.
+        /// </summary>
+        private void OnUserPickedCustomerName()
+        {
+            if (_suppressNameChange || _loadingData || id > 0) return;
+
+            _namePickedByUser = true;
+            try { RefreshCustomerCreditDisplay(); } catch { }
         }
 
         private void TriggerRecalculation(object sender, EventArgs e)
@@ -309,11 +443,12 @@ namespace ZaibPetroleumService.Model
             {
                 _syncingFields = true;
 
-                decimal litter = 0, rate = 0, advance = 0, credit = 0, amount = 0;
+                decimal litter = 0, rate = 0, credit = 0, amount = 0;
 
                 bool hasLitter = decimal.TryParse((txtlitter.Text ?? "").Replace(",", ""), out litter) && litter > 0;
                 bool hasRate = decimal.TryParse((txtrate.Text ?? "").Replace(",", ""), out rate) && rate > 0;
-                decimal.TryParse((txtadvance.Text ?? "").Replace(",", ""), out advance);
+                // VIP: Advance remove — balance mein advance 0
+                if (txtadvance != null) txtadvance.Text = "0";
                 decimal.TryParse((txtcredit.Text ?? "").Replace(",", ""), out credit);
                 bool isAmountValid = decimal.TryParse((txtamount.Text ?? "").Replace(",", ""), out amount);
 
@@ -321,14 +456,14 @@ namespace ZaibPetroleumService.Model
                 if (hasLitter && hasRate)
                 {
                     amount = litter * rate;
-                    decimal finalBalance = amount - credit + advance;
+                    decimal finalBalance = amount - credit;
                     txtamount.Text = FmtMoney(amount);
                     txtbalance.Text = FmtMoney(finalBalance);
                 }
-                // Direct Amount mode: Balance = Amount − Credit + Advance (Amount alag / Balance alag nahi reh sakta)
+                // Direct Amount mode: Balance = Amount − Credit
                 else if (isAmountValid)
                 {
-                    decimal finalBalance = amount - credit + advance;
+                    decimal finalBalance = amount - credit;
                     txtbalance.Text = FmtMoney(finalBalance);
                 }
             }
@@ -364,7 +499,11 @@ namespace ZaibPetroleumService.Model
                        "IFNULL(PetrolAdd.Amount, 0) AS Amount, " +
                        "IFNULL(PetrolAdd.Balance, 0) AS Balance, " +
                        "IFNULL(PetrolAdd.Credit, 0) AS Credit, PetrolAdd.Note, PetrolAdd.CustomerId, " +
-                       "IFNULL(PetrolAdd.IsInitialEntry, 1) AS IsInitialEntry " +
+                       "IFNULL(PetrolAdd.IsInitialEntry, 1) AS IsInitialEntry, " +
+                       "IFNULL(PetrolAdd.SaleLocation,'') AS SaleLocation, " +
+                       "IFNULL(PetrolAdd.SaleItem,'') AS SaleItem, " +
+                       "IFNULL(PetrolAdd.SaleVehicleModel,'') AS SaleVehicleModel, " +
+                       "IFNULL(PetrolAdd.SaleInOut,'In') AS SaleInOut " +
                        "FROM PetrolAdd " +
                        "INNER JOIN AddCustomer ON PetrolAdd.CustomerId = AddCustomer.Id " +
                        "WHERE PetrolAdd.pid = @id";
@@ -377,8 +516,11 @@ namespace ZaibPetroleumService.Model
                 {
                     DataRow row = dt.Rows[0];
 
-                    txtdate.Text = row["Date"].ToString();
-                    txtrecipt.Text = row["ReceiptNo"].ToString();
+                    if (DateTime.TryParse(Convert.ToString(row["Date"]), out DateTime loadedDate))
+                        txtdate.Value = loadedDate.Date;
+                    else
+                        txtdate.Value = DateTime.Now;
+                    txtrecipt.Text = "";
                     txtVehicle.Text = row["vehicle"].ToString();
 
                     // 0 litter/rate ko khali dikhao taake direct-amount mode rahe
@@ -386,9 +528,8 @@ namespace ZaibPetroleumService.Model
                     decimal rt = row["Rate"] != DBNull.Value ? Convert.ToDecimal(row["Rate"]) : 0;
                     txtlitter.Text = lit > 0 ? lit.ToString("G") : "";
                     txtrate.Text = rt > 0 ? FormatRate(rt) : "";
-                    txtadvance.Text = row["Advance"] != DBNull.Value
-                        ? FmtMoney(Convert.ToDecimal(row["Advance"]))
-                        : "0";
+                    txtadvance.Text = "0";
+                    LoadVipFieldsFromRow(row);
 
                     decimal amount = row["Amount"] != DBNull.Value ? Convert.ToDecimal(row["Amount"]) : 0;
                     decimal credit = row["Credit"] != DBNull.Value ? Convert.ToDecimal(row["Credit"]) : 0;
@@ -406,16 +547,8 @@ namespace ZaibPetroleumService.Model
                         cbName.SelectedValue = row["CustomerId"];
                     }
 
-                    // Credit Customer entry yahan edit nahi (Daily Diesel credit form kholta hai)
-                    int isInitial = Convert.ToInt32(row["IsInitialEntry"]);
-                    _blockSaveCreditRow = (isInitial == 0);
-                    if (_blockSaveCreditRow)
-                    {
-                        CustomeMessage info = new CustomeMessage(
-                            "Ye Credit Customer entry hai — Daily Diesel se dobara double-click karein.",
-                            "INFORMATION");
-                        info.ShowDialog();
-                    }
+                    _lastAppliedVehicle = (txtVehicle.Text ?? "").Trim();
+                    _namePickedByUser = true;
                 }
             }
             catch (Exception ex)
@@ -435,24 +568,14 @@ namespace ZaibPetroleumService.Model
         {
             try
             {
-                if (_blockSaveCreditRow)
-                {
-                    CustomeMessage validationMessage = new CustomeMessage(
-                        "Ye Credit Customer entry hai — is form se update nahi hogi.", "Warning");
-                    validationMessage.ShowDialog();
-                    return;
-                }
-
-                // 🔹 Save se pehle last selected customer yaad rakh lo
-                object lastCustomerId = cbName.SelectedValue;
-
                 string customerName = string.Empty;
 
                 if (txtName.Visible && !string.IsNullOrWhiteSpace(txtName.Text))
                 {
                     customerName = txtName.Text;
                 }
-                else if (cbName.SelectedIndex != -1)
+                else if (cbName.SelectedValue != null && cbName.SelectedValue != DBNull.Value
+                    && int.TryParse(cbName.SelectedValue.ToString(), out int selId) && selId > 0)
                 {
                     customerName = cbName.Text;
                 }
@@ -460,54 +583,47 @@ namespace ZaibPetroleumService.Model
                 {
                     CustomeMessage validationMessage = new CustomeMessage("Customer select karein ya naam daalein!", "Warning");
                     validationMessage.ShowDialog();
+                    try
+                    {
+                        if (txtName != null && txtName.Visible) txtName.Focus();
+                        else if (cbName != null) cbName.Focus();
+                    }
+                    catch { }
                     return;
                 }
                 // ... (baaki tumhara code same ka same)
 
 
-                decimal advance;
-                if (!decimal.TryParse(txtadvance.Text.Replace(",", ""), out advance))
-                    advance = 0;
+                // VIP: Advance / Receipt band
+                if (txtadvance != null) txtadvance.Text = "0";
+                if (txtrecipt != null) txtrecipt.Text = "";
 
-                decimal credit;
-                if (!decimal.TryParse(txtcredit.Text.Replace(",", ""), out credit))
-                    credit = 0;
+                // Litter / Rate / Amount / Credit optional — empty pe 0 (validation nahi)
+                decimal credit = 0;
+                decimal.TryParse((txtcredit.Text ?? "").Replace(",", "").Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out credit);
 
-                decimal litter;
-                if (!decimal.TryParse(txtlitter.Text.Replace(",", ""), out litter))
-                    litter = 0;
+                decimal litter = 0;
+                decimal.TryParse((txtlitter.Text ?? "").Replace(",", "").Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out litter);
 
-                decimal rate;
-                if (!decimal.TryParse(txtrate.Text.Replace(",", ""), out rate))
-                    rate = 0;
+                decimal rate = 0;
+                decimal.TryParse((txtrate.Text ?? "").Replace(",", "").Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out rate);
 
                 decimal amount = 0;
-                string amountText = (txtamount.Text ?? "").Replace(",", "").Trim();
-                if (!string.IsNullOrEmpty(amountText) &&
-                    !decimal.TryParse(amountText, NumberStyles.Any, CultureInfo.InvariantCulture, out amount))
+                decimal.TryParse((txtamount.Text ?? "").Replace(",", "").Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out amount);
+
+                DateTime dateValue;
+                try
                 {
-                    CustomeMessage validationMessage = new CustomeMessage("Valid amount daalein!", "Warning");
-                    validationMessage.ShowDialog();
-                    return;
+                    dateValue = txtdate != null ? txtdate.Value.Date : DateTime.Today;
                 }
-
-                // Sirf Credit (litter/rate/amount sab 0) → Credit Customer entry (IsInitialEntry=0)
-                bool isCreditOnly = litter <= 0 && rate <= 0 && amount <= 0 && credit > 0;
-
-                if (!isCreditOnly && amount <= 0 && !(litter > 0 && rate > 0))
+                catch
                 {
-                    CustomeMessage validationMessage = new CustomeMessage(
-                        "Sale ke liye Litter+Rate ya Amount daalein.\nSirf Credit ke liye Amount khali rakhein aur Credit likhein.",
-                        "Warning");
-                    validationMessage.ShowDialog();
-                    return;
-                }
-
-                if (!DateTime.TryParse(txtdate.Text, out DateTime dateValue))
-                {
-                    CustomeMessage validationMessage = new CustomeMessage("Valid date daalein!", "Warning");
-                    validationMessage.ShowDialog();
-                    return;
+                    if (!DateTime.TryParse(txtdate != null ? txtdate.Text : null, out dateValue))
+                    {
+                        CustomeMessage validationMessage = new CustomeMessage("Valid date daalein!", "Warning");
+                        validationMessage.ShowDialog();
+                        return;
+                    }
                 }
 
                 int customerId = ResolveCustomerIdForSave(customerName);
@@ -520,143 +636,88 @@ namespace ZaibPetroleumService.Model
                     return;
                 }
 
-                if (isCreditOnly)
-                {
-                    string creditLabel = string.IsNullOrWhiteSpace(customerName) ? cbName.Text : customerName;
-                    if (!BalanceConfirmationService.ConfirmCustomerPetrolCredit(customerId, credit, creditLabel))
-                        return;
-
-                    // Balance snapshot — Credit Customer form jaisa
-                    decimal totalAmt = 0, totalCred = 0;
-                    try
-                    {
-                        string balQ = @"SELECT SUM(IFNULL(Amount,0)+IFNULL(Advance,0)) AS TA,
-                                               SUM(IFNULL(Credit,0)) AS TC
-                                        FROM PetrolAdd WHERE CustomerId=@cid" +
-                                      (id > 0 ? " AND pid<>@pid" : "");
-                        var htBal = new Hashtable { { "@cid", customerId } };
-                        if (id > 0) htBal.Add("@pid", id);
-                        DataTable dtBal = MainClass.ExecuteSelectQuery(balQ, htBal);
-                        if (dtBal != null && dtBal.Rows.Count > 0)
-                        {
-                            if (dtBal.Rows[0]["TA"] != DBNull.Value) totalAmt = Convert.ToDecimal(dtBal.Rows[0]["TA"]);
-                            if (dtBal.Rows[0]["TC"] != DBNull.Value) totalCred = Convert.ToDecimal(dtBal.Rows[0]["TC"]);
-                        }
-                    }
-                    catch { /* optional */ }
-
-                    decimal creditBalance = totalAmt - (totalCred + credit);
-                    bool isEditCredit = id > 0;
-                    string qryCredit;
-                    Hashtable htCredit = new Hashtable
-                    {
-                        { "@customerId", customerId },
-                        { "@date", dateValue.ToString("yyyy-MM-dd") },
-                        { "@recipt", txtrecipt.Text },
-                        { "@credit", credit.ToString("F2") },
-                        { "@balance", creditBalance.ToString("F2") },
-                        { "@note", txtnote.Text }
-                    };
-
-                    if (!isEditCredit)
-                    {
-                        qryCredit = @"INSERT INTO PetrolAdd (CustomerId, Date, ReceiptNo, Credit, Balance, Note, IsInitialEntry)
-                                      VALUES (@customerId, @date, @recipt, @credit, @balance, @note, 0)";
-                    }
-                    else
-                    {
-                        // Sirf credit row update — sale touch nahi
-                        qryCredit = @"UPDATE PetrolAdd SET CustomerId=@customerId, Date=@date, ReceiptNo=@recipt,
-                                      Credit=@credit, Balance=@balance, Note=@note
-                                      WHERE pid=@pid AND IFNULL(IsInitialEntry,1)=0";
-                        htCredit.Add("@pid", id);
-                    }
-
-                    int rCredit = MainClass.DataInsertUpdateDelete(qryCredit, htCredit);
-                    if (rCredit > 0)
-                    {
-                        BalanceConfirmationService.RecalculateCustomerPetrolBalances(customerId);
-                        CustomeMessage successMessage = new CustomeMessage(
-                            isEditCredit
-                                ? "Credit entry update ho gayi! (Credit Customer mein bhi)"
-                                : "Credit entry save ho gayi! (Credit Customer mein bhi)",
-                            "Success");
-                        successMessage.ShowDialog();
-
-                        if (isEditCredit)
-                        {
-                            DialogResult = DialogResult.OK;
-                            Close();
-                            return;
-                        }
-
-                        string lastTypedName = txtName.Text.Trim();
-                        ResetFormKeepSelectedDate();
-                        id = 0;
-                        TotalBalance = 0;
-                        if (txtName.Visible)
-                        {
-                            txtName.Text = lastTypedName;
-                            txtName.Focus();
-                        }
-                        else
-                        {
-                            cbName.SelectedValue = lastCustomerId;
-                            cbName.Focus();
-                        }
-                        txtamount.Clear();
-                        txtbalance.Clear();
-                        txtcredit.Clear();
-                    }
-                    else if (isEditCredit)
-                    {
-                        ErrorFormMessage errorMessage = new ErrorFormMessage(
-                            "Credit update nahi hua. Credit Customer form se try karein.", "Error");
-                        errorMessage.ShowDialog();
-                    }
-                    return;
-                }
-
                 // ——— Normal SALE (IsInitialEntry=1) ———
                 if (litter > 0 && rate > 0 && amount <= 0)
                     amount = litter * rate;
 
                 decimal balance = amount - credit;
-                decimal finalBalance = balance + advance;
+                decimal finalBalance = balance; // advance = 0 (VIP)
                 TotalBalance += finalBalance;
+
+                // Credit > 0 pe save se pehle bhi Out force (galti se In na save ho)
+                try { AutoOutWhenCreditEntered(credit); } catch { }
+
+                string saleLoc = GetVipSaleLocation();
+                string saleItem = GetVipSaleItem();
+                string saleModel = GetVipSaleVehicleModel();
+                string saleInOut = GetVipSaleInOut();
+                if (credit > 0 && !string.Equals(saleInOut, "Out", StringComparison.OrdinalIgnoreCase))
+                    saleInOut = "Out";
 
                 string qry;
                 Hashtable htSave = new Hashtable();
-                bool isEdit = id > 0;
+                int editId = id;
+
+                // Delete ke baad stale id → UPDATE 0 rows: pehle check
+                if (editId > 0)
+                {
+                    try
+                    {
+                        DataTable exists = MainClass.ExecuteSelectQuery(
+                            "SELECT pid FROM PetrolAdd WHERE pid=@pid LIMIT 1",
+                            new Hashtable { { "@pid", editId } });
+                        if (exists == null || exists.Rows.Count == 0)
+                            editId = 0;
+                    }
+                    catch { editId = 0; }
+                }
+
+                bool isEdit = editId > 0;
 
                 if (!isEdit)
                 {
-                    qry = "INSERT INTO PetrolAdd (CustomerId, Date, ReceiptNo, vehicle, Litter, Rate, Advance, Amount, Credit, Balance, Note, IsInitialEntry) " +
-                          "VALUES (@customerId, @date, @recipt, @veh, @litter, @rate, @advance, @amount, @credit, @balance, @note, 1)";
+                    qry = "INSERT INTO PetrolAdd (CustomerId, Date, ReceiptNo, vehicle, Litter, Rate, Advance, Amount, Credit, Balance, Note, IsInitialEntry, SaleLocation, SaleItem, SaleVehicleModel, SaleInOut) " +
+                          "VALUES (@customerId, @date, @recipt, @veh, @litter, @rate, @advance, @amount, @credit, @balance, @note, 1, @saleLoc, @saleItem, @saleModel, @saleInOut)";
                 }
                 else
                 {
-                    // Sirf sale row (IsInitialEntry=1) — credit entry touch nahi
                     qry = "UPDATE PetrolAdd SET CustomerId = @customerId, Date = @date, ReceiptNo = @recipt, vehicle = @veh, " +
                           "Litter = @litter, Rate = @rate, Advance = @advance, Amount = @amount, Credit = @credit, " +
-                          "Balance = @balance, Note = @note WHERE pid = @pid AND IFNULL(IsInitialEntry,1)=1";
-                    htSave.Add("@pid", id);
+                          "Balance = @balance, Note = @note, IsInitialEntry = 1, " +
+                          "SaleLocation=@saleLoc, SaleItem=@saleItem, SaleVehicleModel=@saleModel, SaleInOut=@saleInOut " +
+                          "WHERE pid = @pid";
+                    htSave.Add("@pid", editId);
                 }
 
                 htSave.Add("@customerId", customerId);
                 htSave.Add("@date", dateValue.ToString("yyyy-MM-dd"));
-                htSave.Add("@recipt", txtrecipt.Text);
+                htSave.Add("@recipt", "");
                 htSave.Add("@veh", txtVehicle.Text);
                 htSave.Add("@litter", litter.ToString("F2"));
                 htSave.Add("@rate", FormatRate(rate));
-                htSave.Add("@advance", advance.ToString("F2"));
+                htSave.Add("@advance", "0");
                 htSave.Add("@amount", amount.ToString("F2"));
                 htSave.Add("@credit", credit.ToString("F2"));
                 htSave.Add("@balance", finalBalance.ToString("F2"));
                 htSave.Add("@note", txtnote.Text);
+                htSave.Add("@saleLoc", string.IsNullOrWhiteSpace(saleLoc) ? (object)DBNull.Value : saleLoc);
+                htSave.Add("@saleItem", string.IsNullOrWhiteSpace(saleItem) ? (object)DBNull.Value : saleItem);
+                htSave.Add("@saleModel", string.IsNullOrWhiteSpace(saleModel) ? (object)DBNull.Value : saleModel);
+                htSave.Add("@saleInOut", saleInOut);
 
                 int r = MainClass.DataInsertUpdateDelete(qry, htSave);
-                string lastTypedNameSale = txtName.Text.Trim();
+
+                // UPDATE fail (delete-then-save) → naya INSERT
+                if (r <= 0 && isEdit)
+                {
+                    editId = 0;
+                    isEdit = false;
+                    id = 0;
+                    htSave.Remove("@pid");
+                    qry = "INSERT INTO PetrolAdd (CustomerId, Date, ReceiptNo, vehicle, Litter, Rate, Advance, Amount, Credit, Balance, Note, IsInitialEntry, SaleLocation, SaleItem, SaleVehicleModel, SaleInOut) " +
+                          "VALUES (@customerId, @date, @recipt, @veh, @litter, @rate, @advance, @amount, @credit, @balance, @note, 1, @saleLoc, @saleItem, @saleModel, @saleInOut)";
+                    r = MainClass.DataInsertUpdateDelete(qry, htSave);
+                }
 
                 if (r > 0)
                 {
@@ -665,6 +726,9 @@ namespace ZaibPetroleumService.Model
                         isEdit ? "Entry update ho gayi!" : "Entry save ho gayi!", "Success");
                     successMessage.ShowDialog();
 
+                    // Grid async refresh — save pe lag nahi
+                    NotifyDiselViewRefresh(dateValue);
+
                     if (isEdit)
                     {
                         DialogResult = DialogResult.OK;
@@ -672,28 +736,22 @@ namespace ZaibPetroleumService.Model
                         return;
                     }
 
-                    ResetFormKeepSelectedDate();
+                    // Name + Date fix (Dealer Amount jaisa)
+                    ResetAfterSaveKeepNameAndDate();
                     id = 0;
                     TotalBalance = 0;
-
-                    if (txtName.Visible)
-                    {
-                        txtName.Text = lastTypedNameSale;
-                        txtName.Focus();
-                    }
-                    else
-                    {
-                        cbName.SelectedValue = lastCustomerId;
-                        cbName.Focus();
-                    }
-
-                    txtamount.Clear();
-                    txtbalance.Clear();
+                    try { txtVehicle.Focus(); txtVehicle.Select(); } catch { }
                 }
                 else if (isEdit)
                 {
                     ErrorFormMessage errorMessage = new ErrorFormMessage(
-                        "Update nahi hua. Ye Credit entry ho sakti hai — Daily Diesel se double-click karein.", "Error");
+                        "Update nahi hua.", "Error");
+                    errorMessage.ShowDialog();
+                }
+                else
+                {
+                    ErrorFormMessage errorMessage = new ErrorFormMessage(
+                        "Entry save nahi hui!", "Error");
                     errorMessage.ShowDialog();
                 }
 
@@ -735,8 +793,11 @@ namespace ZaibPetroleumService.Model
                                     BalanceConfirmationService.RecalculateCustomerPetrolBalances(customerIdForRepair);
                                 CustomeMessage successMessage = new CustomeMessage("Record delete ho gaya!", "Success");
                                 successMessage.ShowDialog();
-                                ResetFormKeepSelectedDate();
+                                DateTime keepDate = DateTime.Now;
+                                try { if (txtdate != null) keepDate = txtdate.Value; } catch { }
+                                ResetAfterSaveKeepNameAndDate();
                                 id = 0;
+                                NotifyDiselViewRefresh(keepDate);
                             }
                             else
                             {
@@ -762,6 +823,56 @@ namespace ZaibPetroleumService.Model
                 ErrorFormMessage errorMessage = new ErrorFormMessage("Error (Delete): " + ex.Message, "Error");
                 errorMessage.ShowDialog();
             }
+        }
+
+        /// <summary>Save/Delete ke baad Daily Diesel grid refresh (Owner pehle — halka).</summary>
+        private void NotifyDiselViewRefresh(DateTime entryDate)
+        {
+            try
+            {
+                ZaibPetroleumService.View.frmDiselView view =
+                    Owner as ZaibPetroleumService.View.frmDiselView;
+
+                if (view == null || view.IsDisposed)
+                {
+                    foreach (Form f in Application.OpenForms)
+                    {
+                        view = f as ZaibPetroleumService.View.frmDiselView;
+                        if (view != null && !view.IsDisposed) break;
+                        try
+                        {
+                            foreach (Control c in f.Controls)
+                            {
+                                if (c is ZaibPetroleumService.View.frmDiselView v && !v.IsDisposed)
+                                {
+                                    view = v;
+                                    break;
+                                }
+                            }
+                        }
+                        catch { }
+                        if (view != null) break;
+                    }
+                }
+
+                if (view == null || view.IsDisposed) return;
+
+                Action refresh = () =>
+                {
+                    try { view.RefreshAfterChildSave(entryDate); } catch { }
+                };
+                // Sync refresh — delete/save ke baad grid turant dikhe (Roznamcha jaisa)
+                if (view.IsHandleCreated)
+                {
+                    if (view.InvokeRequired)
+                        view.Invoke(refresh);
+                    else
+                        refresh();
+                }
+                else
+                    refresh();
+            }
+            catch { }
         }
 
         private void txtbalance_TextChanged(object sender, EventArgs e)
@@ -799,6 +910,12 @@ namespace ZaibPetroleumService.Model
                     txtcredit.SelectionStart = txtcredit.Text.Length;
                     _syncingFields = false;
                     SyncBalanceFromAmount();
+                    // Credit amount → galti se In ho to automatic Out
+                    try { AutoOutWhenCreditEntered(value); } catch { }
+                }
+                else if (string.IsNullOrWhiteSpace(currentText))
+                {
+                    try { AutoOutWhenCreditEntered(0); } catch { }
                 }
             }
             catch (Exception ex)
@@ -823,6 +940,9 @@ namespace ZaibPetroleumService.Model
                     _syncingFields = false;
                     // Amount badla → Balance turant sync (alag Balance issue nahi)
                     SyncBalanceFromAmount();
+                    // Amount → In (agar Credit empty); baad mein user In/Out change kar sakta hai
+                    if (value > 0)
+                        try { AutoInWhenAmountFocus(); } catch { }
                 }
             }
             catch (Exception ex)
@@ -1102,6 +1222,8 @@ namespace ZaibPetroleumService.Model
         {
             try
             {
+                if (_suppressNameChange || _loadingData) return;
+
                 string enteredName = txtName.Text.Trim();
                 if (!string.IsNullOrEmpty(enteredName))
                 {
@@ -1119,15 +1241,30 @@ namespace ZaibPetroleumService.Model
                             }
                         }
 
-                        if (match != null)
-                            cbName.SelectedValue = match["Id"];
-                        else
-                            cbName.SelectedIndex = -1;
+                        _suppressNameChange = true;
+                        try
+                        {
+                            if (match != null)
+                                cbName.SelectedValue = match["Id"];
+                            else
+                                cbName.SelectedValue = BlankCustomerIdValue();
+                        }
+                        finally { _suppressNameChange = false; }
                     }
+
+                    OnUserPickedCustomerName();
+                }
+                else
+                {
+                    _suppressNameChange = true;
+                    try { cbName.SelectedValue = BlankCustomerIdValue(); }
+                    finally { _suppressNameChange = false; }
+                    _namePickedByUser = false;
                 }
             }
             catch (Exception ex)
             {
+                _suppressNameChange = false;
                 ErrorFormMessage errorMessage = new ErrorFormMessage("Error (txtName_TextChanged): " + ex.Message, "Error");
                 errorMessage.ShowDialog();
             }

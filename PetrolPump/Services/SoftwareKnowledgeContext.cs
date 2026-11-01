@@ -28,13 +28,10 @@ namespace ZaibPetroleumService.Services
             sb.AppendLine("Add Customer → frmCustomerView (customer add/edit, PetrolAdd entries)");
             sb.AppendLine("Daily Diesel Sales → frmDiselView (rozana customer ko diesel sale — liters, rate, amount, credit)");
             sb.AppendLine("Credit Customer → frmCreditAdjust (customer credit adjust / wasooli)");
-            sb.AppendLine("CustomerToCustomer → frmCustomerToCustomerView (ek customer se doosre ko transfer)");
-            sb.AppendLine("CustomerToDealer → frmDieselLedger (customer se dealer payment / ledger)");
             sb.AppendLine("Add Dealer → frmDealerNameView (dealer add, DDAmount/DAmount balance)");
             sb.AppendLine("Dealer Ledger → frmDealerAmountCombinedView (payout + direct + dealer amount stock + running balance)");
             sb.AppendLine("Dealer Payout → frmDieselLedgerView (dealer ko payment / payout entries)");
             sb.AppendLine("DealerAmount → frmStockView (dealer se diesel PURCHASE/stock — AddStock table, AddDisel liters + Rate)");
-            sb.AppendLine("DealerToDealer → frmDealertoDealerView (dealer se dealer transfer)");
             sb.AppendLine("Direct Dealer Amount → FrmDirectDealerPaymentAmountView (direct dealer payment)");
             sb.AppendLine("Stock → frmStockDieselView (StockDiesel table — stock diesel entries)");
             sb.AppendLine("Closing Form → frmClosingformEntry (monthly closing, profit/loss calculation)");

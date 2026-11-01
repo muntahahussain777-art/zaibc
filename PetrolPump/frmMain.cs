@@ -33,6 +33,7 @@ namespace ZaibPetroleumService
 
         private Guna2Button[] _orderedSideMenuButtons;
         private Guna2Button btnBulMal;
+        private Guna2Button btnDealerLedger;
 
         private static readonly Color MenuActiveFill = Color.FromArgb(220, 53, 69);
         private static readonly Color MenuActiveHoverFill = Color.FromArgb(255, 82, 97);
@@ -83,20 +84,29 @@ namespace ZaibPetroleumService
             panelLogo.Dock = DockStyle.Top;
 
             EnsureBulMalMenuButton();
+            EnsureDealerLedgerMenuButton();
+
+            // CustomerToCustomer / CustomerToDealer / DealerToDealer — complete remove (menu se)
+            try
+            {
+                if (guna2Button12 != null) { guna2Button12.Visible = false; guna2Button12.Enabled = false; }
+                if (guna2Button3 != null) { guna2Button3.Visible = false; guna2Button3.Enabled = false; }
+                if (guna2Button11 != null) { guna2Button11.Visible = false; guna2Button11.Enabled = false; }
+                // Credit Customer / Dealer Payout / Direct Dealer Amount — menu se hide
+                if (guna2Button2 != null) { guna2Button2.Visible = false; guna2Button2.Enabled = false; }
+                if (guna2Button13 != null) { guna2Button13.Visible = false; guna2Button13.Enabled = false; }
+                if (guna2Button14 != null) { guna2Button14.Visible = false; guna2Button14.Enabled = false; }
+            }
+            catch { }
 
             _orderedSideMenuButtons = new[]
             {
                 guna2Button1,
                 guna2Button7,
                 guna2Button8,
-                guna2Button2,
-                guna2Button12,
-                guna2Button3,
                 guna2Button5,
-                guna2Button13,
                 guna2Button9,
-                guna2Button11,
-                guna2Button14,
+                btnDealerLedger,
                 btnstock,
                 dgvFaida,
                 btnClosing2,
@@ -156,6 +166,31 @@ namespace ZaibPetroleumService
             PanelSideMenu.Controls.Add(btnBulMal);
         }
 
+        private void EnsureDealerLedgerMenuButton()
+        {
+            if (btnDealerLedger != null && !btnDealerLedger.IsDisposed)
+                return;
+
+            btnDealerLedger = new Guna2Button
+            {
+                Name = "btnDealerLedger",
+                Text = "  Dealer Ledger",
+                AutoRoundedCorners = true,
+                BorderRadius = 16,
+                FillColor = Color.FromArgb(39, 49, 70),
+                Font = new Font("Segoe UI", 12F, FontStyle.Bold),
+                ForeColor = Color.White,
+                Size = new Size(218, 35),
+                TextAlign = HorizontalAlignment.Left
+            };
+            btnDealerLedger.CheckedState.Parent = btnDealerLedger;
+            btnDealerLedger.CustomImages.Parent = btnDealerLedger;
+            btnDealerLedger.HoverState.Parent = btnDealerLedger;
+            btnDealerLedger.ShadowDecoration.Parent = btnDealerLedger;
+            btnDealerLedger.Click += btnDealerLedger_Click;
+            PanelSideMenu.Controls.Add(btnDealerLedger);
+        }
+
         private void LayoutSideMenuButtons()
         {
             if (_orderedSideMenuButtons == null)
@@ -169,6 +204,7 @@ namespace ZaibPetroleumService
 
             foreach (Guna2Button btn in _orderedSideMenuButtons)
             {
+                if (btn == null || !btn.Visible) continue;
                 btn.Size = new Size(width, btnH);
                 btn.Location = new Point(left, y);
                 btn.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
@@ -318,7 +354,12 @@ namespace ZaibPetroleumService
                 return;
             }
 
-            Controlspanel.Controls.Clear();  // Clear existing controls
+            while (Controlspanel.Controls.Count > 0)
+            {
+                Control old = Controlspanel.Controls[0];
+                Controlspanel.Controls.Remove(old);
+                old.Dispose();
+            }
             F.TopLevel = false;  // Set form as a non-top-level
             Controlspanel.Controls.Add(F);  // Add the form to the panel
             F.Dock = DockStyle.Fill;  // Fill the panel
@@ -339,16 +380,11 @@ namespace ZaibPetroleumService
             _menuButtonStyles.Clear();
 
             MapMenuButton<frmDashBoard>(guna2Button1);
-            MapMenuButton<frmCreditAdjust>(guna2Button2);
-            MapMenuButton<frmDieselLedger>(guna2Button3);
-            MapMenuButton<frmCustomerToCustomerView>(guna2Button12);
             MapMenuButton<frmCustomerView>(guna2Button7);
             MapMenuButton<frmDiselView>(guna2Button8);
             MapMenuButton<frmDealerNameView>(guna2Button5);
             MapMenuButton<frmStockView>(guna2Button9);
-            MapMenuButton<frmDealertoDealerView>(guna2Button11);
-            MapMenuButton<frmDieselLedgerView>(guna2Button13);
-            MapMenuButton<frmDealerAmountCombinedView>(guna2Button14);
+            MapMenuButton<frmDealerAmountCombinedView>(btnDealerLedger);
             MapMenuButton<frmStockDieselView>(btnstock);
             MapMenuButton<frmClosingformEntry>(dgvFaida);
             MapMenuButton<frmClosing2>(btnClosing2);
@@ -532,9 +568,7 @@ namespace ZaibPetroleumService
 
         private void guna2Button2_Click(object sender, EventArgs e)
         {
-            AddControls(new frmCreditAdjust());
-
-
+            // Credit Customer removed from menu
         }
 
         private void guna2Button7_Click(object sender, EventArgs e)
@@ -566,7 +600,7 @@ namespace ZaibPetroleumService
 
         private void guna2Button3_Click_1(object sender, EventArgs e)
         {
-            AddControls(new frmDieselLedger());
+            // CustomerToDealer removed
         }
 
         private void guna2Button4_Click_1(object sender, EventArgs e)
@@ -625,7 +659,7 @@ namespace ZaibPetroleumService
 
         private void guna2Button12_Click(object sender, EventArgs e)
         {
-            AddControls(new frmCustomerToCustomerView());
+            // CustomerToCustomer removed
         }
 
         private void btnstock_Click_1(object sender, EventArgs e)
@@ -635,16 +669,20 @@ namespace ZaibPetroleumService
 
         private void guna2Button11_Click_1(object sender, EventArgs e)
         {
-            AddControls(new frmDealertoDealerView());
-
+            // DealerToDealer removed
         }
 
         private void guna2Button13_Click(object sender, EventArgs e)
         {
-            AddControls(new frmDieselLedgerView());
+            // Dealer Payout removed — use DealerAmount
         }
 
         private void guna2Button14_Click(object sender, EventArgs e)
+        {
+            // Direct Dealer Amount removed — use DealerAmount
+        }
+
+        private void btnDealerLedger_Click(object sender, EventArgs e)
         {
             AddControls(new frmDealerAmountCombinedView());
         }

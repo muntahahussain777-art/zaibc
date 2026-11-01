@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Data;
 using System.Drawing;
@@ -40,7 +40,6 @@ namespace ZaibPetroleumService.Model
             }
 
             this.KeyPreview = true;
-            this.KeyDown += new KeyEventHandler(FrmDirectDealerPaymentAmountAdd_KeyDown);
 
             txtDealerName.Visible = false;
             txtDealerName.TextChanged += txtDealerName_TextChanged;
@@ -103,10 +102,9 @@ namespace ZaibPetroleumService.Model
                     cbDealer.Visible = true;
                     cbDealer.Focus();
                 }
-                else if (e.KeyCode == Keys.S)   // Ctrl + S
+                else if (e.KeyCode == Keys.S)
                 {
                     e.SuppressKeyPress = true;
-                    btnSave_Click(null, null);   // ← BEST, AZAADI, NO ERROR
                 }
             }
         }

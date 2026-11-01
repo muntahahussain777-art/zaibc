@@ -94,68 +94,34 @@ namespace ZaibPetroleumService.View
 
         private void UpdateStockSummaryLabels(DateTime? startDate = null, DateTime? endDate = null)
         {
-            if (guna2DataGridView1.DataSource == null)
+            // Litter / Minus Litter labels band — sirf Total Amount
+            if (lblTotalLitter != null)
             {
-                lblTotalLitter.Text = "Add Litter: 0.00 L | Minus Litter: 0.00 L | Baqaya: 0.00 L";
-                lblTotalAmount.Text = "Add Amount: Rs 0 | Minus Amount: Rs 0 | Total: Rs 0";
-                PositionSummaryLabels();
-                return;
+                lblTotalLitter.Visible = false;
+                lblTotalLitter.Text = "";
             }
 
-            decimal addLitter = 0;
-            decimal minusLitter = 0;
-            decimal addAmount = 0;
-            decimal minusAmount = 0;
-
-            foreach (DataGridViewRow row in guna2DataGridView1.Rows)
+            decimal totalAmount = 0;
+            if (guna2DataGridView1.DataSource != null &&
+                guna2DataGridView1.Columns.Contains("Amount") &&
+                guna2DataGridView1.Columns.Contains("SID"))
             {
-                if (row.IsNewRow) continue;
-                if (row.Cells["SID"].Value == null || row.Cells["SID"].Value == DBNull.Value)
-                    continue;
-
-                if (startDate.HasValue && endDate.HasValue &&
-                    guna2DataGridView1.Columns.Contains("Date") &&
-                    row.Cells["Date"].Value != null && row.Cells["Date"].Value != DBNull.Value)
+                foreach (DataGridViewRow row in guna2DataGridView1.Rows)
                 {
-                    if (DateTime.TryParse(row.Cells["Date"].Value.ToString(), out DateTime rowDate))
-                    {
-                        rowDate = rowDate.Date;
-                        if (rowDate < startDate.Value.Date || rowDate > endDate.Value.Date)
-                            continue;
-                    }
-                }
-
-                if (row.Cells["Litter"].Value == null || row.Cells["Litter"].Value == DBNull.Value)
-                    continue;
-
-                decimal displayLitter = Convert.ToDecimal(row.Cells["Litter"].Value);
-                string entryType = row.Cells["EntryType"].Value?.ToString() ?? "";
-                bool isMinus = entryType.IndexOf("Minus", StringComparison.OrdinalIgnoreCase) >= 0;
-
-                decimal amount = 0;
-                if (row.Cells["Amount"].Value != null && row.Cells["Amount"].Value != DBNull.Value)
-                    amount = Math.Abs(Convert.ToDecimal(row.Cells["Amount"].Value));
-
-                if (isMinus)
-                {
-                    minusLitter += displayLitter;
-                    minusAmount += amount;
-                }
-                else
-                {
-                    addLitter += displayLitter;
-                    addAmount += amount;
+                    if (row.IsNewRow) continue;
+                    if (row.Cells["SID"].Value == null || row.Cells["SID"].Value == DBNull.Value)
+                        continue;
+                    if (row.Cells["Amount"].Value == null || row.Cells["Amount"].Value == DBNull.Value)
+                        continue;
+                    totalAmount += Convert.ToDecimal(row.Cells["Amount"].Value);
                 }
             }
 
-            decimal baqayaLitter = addLitter - minusLitter;
-            decimal netAmount = addAmount - minusAmount;
-
-            lblTotalLitter.Text =
-                $"Add Litter: {FormatLit(addLitter)} L | Minus Litter: {FormatLit(minusLitter)} L | Baqaya: {FormatLit(baqayaLitter)} L";
-
-            lblTotalAmount.Text =
-                $"Add Amount: Rs {FormatRs(addAmount)} | Minus Amount: Rs {FormatRs(minusAmount)} | Total: Rs {FormatRs(netAmount)}";
+            if (lblTotalAmount != null)
+            {
+                lblTotalAmount.Visible = true;
+                lblTotalAmount.Text = $"Total Amount: Rs {FormatRs(totalAmount)}";
+            }
 
             PositionSummaryLabels();
         }

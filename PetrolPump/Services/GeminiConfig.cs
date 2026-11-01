@@ -9,8 +9,7 @@ namespace ZaibPetroleumService.Services
     public static class GeminiConfig
     {
         private static readonly string ExtraKeysFile = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DiselPetrolPump", "gemini_keys.txt");
+            LocalAppStorage.GetLocalDataDirectory(), "gemini_keys.txt");
 
         public static string Model =>
             ConfigurationManager.AppSettings["GeminiModel"] ?? "gemini-2.5-flash";

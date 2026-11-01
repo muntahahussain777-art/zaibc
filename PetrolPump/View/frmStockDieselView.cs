@@ -19,24 +19,32 @@ namespace ZaibPetroleumService.View
         {
             try
             {
-                LoadData1();
+                // Pehle date range — warna filter combo LoadData1 ko 2024 designer dates se empty dikhata hai
+                dtpStart.Value = new DateTime(DateTime.Now.Year, 1, 1);
+                dtpEnd.Value = DateTime.Now.Date.AddDays(1).AddSeconds(-1);
 
-                comboBox1.Items.Add("TotalAmount/Divide");  // New option for Litter * Rate divided by Litter
-                comboBox1.SelectedIndex = 0;  // Default selection
+                EnsurePartyStockViewUi();
+                if (comboBox1.Items.Count == 0)
+                    comboBox1.Items.Add("TotalAmount/Divide");
+                if (comboBox1.Items.Count > 0)
+                    comboBox1.SelectedIndex = 0;
 
-                dtpStart.Value = DateTime.Now;
-                dtpEnd.Value = DateTime.Now;
-
+                dtpStart.ValueChanged -= DatePickers_ValueChanged;
+                dtpEnd.ValueChanged -= DatePickers_ValueChanged;
                 dtpStart.ValueChanged += DatePickers_ValueChanged;
                 dtpEnd.ValueChanged += DatePickers_ValueChanged;
+                LoadData1();
                 SetupStockGridFormatting();
-                SetupStockPdfButton();
-                SetupStockReportButton();
+                // Fazool: PDF / Report / Assets band — sirf Stock party work
+                HideStockFazoolUi();
+                SetupStockAdd2Button();
                 SetupStockActionLayout();
                 Shown += (s, ev) =>
                 {
+                    HideStockFazoolUi();
                     PositionTopActionButtons();
-                    PositionSummaryLabels();
+                    ApplyPartyGridColumns();
+                    try { LoadData1(); } catch { }
                 };
             }
             catch (Exception ex)
@@ -51,8 +59,10 @@ namespace ZaibPetroleumService.View
             try
             {
                 frmStockDieselAdd frm = new frmStockDieselAdd();
-                frm.ShowDialog();
-                LoadData1();
+                frm.id = 0;
+                frm.ShowDialog(this);
+                // Save ke dauran pehle se refresh ho chuka — yahan halka Load
+                try { LoadData1(); } catch { }
             }
             catch (Exception ex)
             {
@@ -61,34 +71,310 @@ namespace ZaibPetroleumService.View
             }
         }
 
+        private bool _forceShowAllStock;
+
+        /// <summary>Add/Edit/Delete ke baad — halka refresh (date range expand + LoadData1).</summary>
+        public void RefreshPartyStockGrid(DateTime? entryDate = null)
+        {
+            try
+            {
+                DateTime d = (entryDate ?? DateTime.Now).Date;
+                try
+                {
+                    dtpStart.ValueChanged -= DatePickers_ValueChanged;
+                    dtpEnd.ValueChanged -= DatePickers_ValueChanged;
+                }
+                catch { }
+
+                try
+                {
+                    if (dtpStart != null && dtpStart.Value.Date > d)
+                        dtpStart.Value = d;
+                    if (dtpEnd != null && dtpEnd.Value.Date < d)
+                        dtpEnd.Value = d;
+                }
+                catch { }
+
+                try
+                {
+                    dtpStart.ValueChanged -= DatePickers_ValueChanged;
+                    dtpEnd.ValueChanged -= DatePickers_ValueChanged;
+                    dtpStart.ValueChanged += DatePickers_ValueChanged;
+                    dtpEnd.ValueChanged += DatePickers_ValueChanged;
+                }
+                catch { }
+
+                LoadData1();
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    ErrorFormMessage err = new ErrorFormMessage("Error (Refresh): " + ex.Message, "Error");
+                    err.ShowDialog();
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>Filters/dates clear — nayi save entries grid mein dikhein (Daily Diesel style).</summary>
+        public void PreparePartyGridForShowAll(DateTime? entryDate = null)
+        {
+            try
+            {
+                dtpStart.ValueChanged -= DatePickers_ValueChanged;
+                dtpEnd.ValueChanged -= DatePickers_ValueChanged;
+            }
+            catch { }
+
+            try
+            {
+                if (txtSearch != null)
+                {
+                    txtSearch.TextChanged -= txtSearch_TextChanged;
+                    txtSearch.Text = "";
+                    txtSearch.TextChanged += txtSearch_TextChanged;
+                }
+            }
+            catch
+            {
+                try { if (txtSearch != null) txtSearch.Text = ""; } catch { }
+            }
+
+            try
+            {
+                DateTime d = (entryDate ?? DateTime.Now).Date;
+                DateTime yearStart = new DateTime(DateTime.Now.Year, 1, 1);
+                DateTime endWide = DateTime.Today.AddMonths(1);
+                if (d < yearStart) yearStart = d;
+                if (d > endWide) endWide = d.AddDays(1);
+
+                if (dtpStart != null)
+                {
+                    if (dtpStart.Value.Date > yearStart)
+                        dtpStart.Value = yearStart;
+                    if (dtpStart.Value.Date > d)
+                        dtpStart.Value = d;
+                }
+                if (dtpEnd != null)
+                {
+                    if (dtpEnd.Value.Date < endWide)
+                        dtpEnd.Value = endWide;
+                    if (dtpEnd.Value.Date < d)
+                        dtpEnd.Value = d;
+                }
+            }
+            catch { }
+
+            try
+            {
+                dtpStart.ValueChanged -= DatePickers_ValueChanged;
+                dtpEnd.ValueChanged -= DatePickers_ValueChanged;
+                dtpStart.ValueChanged += DatePickers_ValueChanged;
+                dtpEnd.ValueChanged += DatePickers_ValueChanged;
+            }
+            catch { }
+
+            try { ResetPartyFiltersToAll(); } catch { }
+        }
+
+        /// <summary>
+        /// Delete ke baad DataSource=null se Guna columns toot jati hain —
+        /// naya save DB mein hota hai lekin grid khali dikhti hai. Har bind pe columns reset.
+        /// </summary>
+        private void BindStockPartyGrid(DataTable displayTable)
+        {
+            if (guna2DataGridView1 == null) return;
+
+            try
+            {
+                guna2DataGridView1.SuspendLayout();
+                guna2DataGridView1.AutoGenerateColumns = true;
+                guna2DataGridView1.DataSource = null;
+                guna2DataGridView1.Columns.Clear();
+                guna2DataGridView1.AutoGenerateColumns = true;
+                guna2DataGridView1.DataSource = displayTable ?? new DataTable();
+                try { guna2DataGridView1.Refresh(); } catch { }
+            }
+            catch
+            {
+                try
+                {
+                    guna2DataGridView1.AutoGenerateColumns = true;
+                    guna2DataGridView1.DataSource = displayTable;
+                }
+                catch { return; }
+            }
+            finally
+            {
+                try { guna2DataGridView1.ResumeLayout(); } catch { }
+            }
+
+            try
+            {
+                if (guna2DataGridView1.Columns.Contains("Sr"))
+                    guna2DataGridView1.Columns["Sr"].HeaderText = "S/N";
+
+                if (guna2DataGridView1.Columns.Contains("DealerName"))
+                    guna2DataGridView1.Columns["DealerName"].HeaderText = "Name";
+
+                if (guna2DataGridView1.Columns.Contains("EntryType"))
+                {
+                    guna2DataGridView1.Columns["EntryType"].HeaderText = "Type";
+                    try { guna2DataGridView1.Columns["EntryType"].DisplayIndex = 6; } catch { }
+                }
+
+                if (guna2DataGridView1.Columns.Contains("TotalLitter"))
+                {
+                    guna2DataGridView1.Columns["TotalLitter"].HeaderText = "Total Litter";
+                    guna2DataGridView1.Columns["TotalLitter"].DefaultCellStyle.Format = "F2";
+                }
+
+                if (guna2DataGridView1.Columns.Contains("Balance"))
+                {
+                    guna2DataGridView1.Columns["Balance"].HeaderText = "Balance";
+                    guna2DataGridView1.Columns["Balance"].DefaultCellStyle.Format = "F2";
+                }
+
+                if (guna2DataGridView1.Columns.Contains("Amount"))
+                {
+                    guna2DataGridView1.Columns["Amount"].HeaderText = "Amount";
+                    guna2DataGridView1.Columns["Amount"].DefaultCellStyle.Format = "N2";
+                }
+
+                if (guna2DataGridView1.Columns.Contains("SID"))
+                    guna2DataGridView1.Columns["SID"].Visible = false;
+
+                if (guna2DataGridView1.Columns.Contains("SDid"))
+                    guna2DataGridView1.Columns["SDid"].Visible = false;
+
+                ApplyPartyGridColumns();
+            }
+            catch { }
+
+            try
+            {
+                foreach (DataGridViewColumn column in guna2DataGridView1.Columns)
+                    column.SortMode = DataGridViewColumnSortMode.NotSortable;
+            }
+            catch { }
+        }
+
         private void LoadData1()
         {
             try
             {
-                string searchText = txtSearch.Text.Trim();
+                // StockType3 column ensure — pehle save ke baad grid empty na ho
+                try
+                {
+                    ProjectConnection.projectconnection.EnsureSchemaUpdates();
+                }
+                catch { }
 
+                string searchText = (txtSearch != null ? txtSearch.Text : "") ?? "";
+                searchText = searchText.Trim();
+
+                string typeFilter = "";
+                string type2Filter = "";
+                string type3Filter = "";
+                int nameFilterId = 0;
+                if (!_forceShowAllStock)
+                {
+                    try { typeFilter = GetPartyTypeFilter(); } catch { typeFilter = ""; }
+                    try { type2Filter = GetPartyType2Filter(); } catch { type2Filter = ""; }
+                    try { type3Filter = GetPartyType3Filter(); } catch { type3Filter = ""; }
+                    try { nameFilterId = GetPartyNameFilterId(); } catch { nameFilterId = 0; }
+                }
+                else
+                {
+                    searchText = "";
+                }
+
+                DateTime startDate = dtpStart != null ? dtpStart.Value.Date : new DateTime(DateTime.Now.Year, 1, 1);
+                DateTime endDate = dtpEnd != null ? dtpEnd.Value.Date : DateTime.Today.AddMonths(1);
+                if (_forceShowAllStock || (startDate.Year <= 2024 && endDate.Year <= 2024 && startDate == endDate))
+                {
+                    startDate = new DateTime(DateTime.Now.Year, 1, 1);
+                    endDate = DateTime.Today.AddMonths(1);
+                    try
+                    {
+                        if (dtpStart != null) dtpStart.Value = startDate;
+                        if (dtpEnd != null) dtpEnd.Value = endDate;
+                    }
+                    catch { }
+                }
+                if (endDate < startDate)
+                {
+                    DateTime tmp = startDate;
+                    startDate = endDate;
+                    endDate = tmp;
+                }
+
+                // Save ke baad sab entries dikhao — date optional wide range
                 string qry = @"
 SELECT 
     StockDiesel.SID AS SID,
     StockDiesel.SDid,
     StockDiesel.Date,
-    AddDealer.DealerName, 
+    IFNULL(StockPartyName.PartyName,'') AS DealerName, 
     StockDiesel.Vehicle,
+    IFNULL(StockDiesel.StockType,'') AS StockType,
+    IFNULL(StockDiesel.StockType2,'') AS StockType2,
+    IFNULL(StockDiesel.StockType3,'') AS StockType3,
     StockDiesel.Rate,
     StockDiesel.Litter,
     StockDiesel.Credit,
     StockDiesel.Debit,
     StockDiesel.Note
 FROM StockDiesel
-LEFT JOIN AddDealer ON StockDiesel.SDid = AddDealer.Did 
-WHERE (AddDealer.DealerName LIKE @searchText OR StockDiesel.Vehicle LIKE @searchText)
-ORDER BY AddDealer.DealerName ASC
-;";
-
+LEFT JOIN StockPartyName ON StockDiesel.SDid = StockPartyName.Pid 
+WHERE 1=1 ";
                 Hashtable parameters = new Hashtable();
-                parameters.Add("@searchText", "%" + searchText + "%");
 
-                DataTable dt = MainClass.ExecuteSelectQuery(qry, parameters);
+                if (!_forceShowAllStock)
+                {
+                    qry += @"
+  AND date(IFNULL(StockDiesel.Date,'1900-01-01')) >= date(@StartDate)
+  AND date(IFNULL(StockDiesel.Date,'1900-01-01')) <= date(@EndDate)
+  AND (
+        @searchText = '%%'
+        OR IFNULL(StockPartyName.PartyName,'') LIKE @searchText COLLATE NOCASE
+        OR IFNULL(StockDiesel.Vehicle,'') LIKE @searchText COLLATE NOCASE
+        OR IFNULL(StockDiesel.Note,'') LIKE @searchText COLLATE NOCASE
+        OR IFNULL(StockDiesel.StockType,'') LIKE @searchText COLLATE NOCASE
+        OR IFNULL(StockDiesel.StockType2,'') LIKE @searchText COLLATE NOCASE
+        OR IFNULL(StockDiesel.StockType3,'') LIKE @searchText COLLATE NOCASE
+        OR CAST(IFNULL(StockDiesel.Credit,0) AS TEXT) LIKE @searchText
+        OR CAST(IFNULL(StockDiesel.Rate,0) AS TEXT) LIKE @searchText
+      )";
+                    parameters.Add("@searchText", "%" + searchText + "%");
+                    parameters.Add("@StartDate", startDate.ToString("yyyy-MM-dd"));
+                    parameters.Add("@EndDate", endDate.ToString("yyyy-MM-dd"));
+                    if (nameFilterId > 0)
+                    {
+                        qry += " AND StockDiesel.SDid = @NameId ";
+                        parameters.Add("@NameId", nameFilterId);
+                    }
+                    if (!string.IsNullOrEmpty(typeFilter))
+                    {
+                        qry += " AND TRIM(IFNULL(StockDiesel.StockType,'')) = @StockType ";
+                        parameters.Add("@StockType", typeFilter);
+                    }
+                    if (!string.IsNullOrEmpty(type2Filter))
+                    {
+                        qry += " AND TRIM(IFNULL(StockDiesel.StockType2,'')) = @StockType2 ";
+                        parameters.Add("@StockType2", type2Filter);
+                    }
+                    if (!string.IsNullOrEmpty(type3Filter))
+                    {
+                        qry += " AND TRIM(IFNULL(StockDiesel.StockType3,'')) = @StockType3 ";
+                        parameters.Add("@StockType3", type3Filter);
+                    }
+                }
+
+                qry += " ORDER BY date(StockDiesel.Date) ASC, StockDiesel.SID ASC;";
+
+                DataTable dt = MainClass.ExecuteSelectQuery(qry, parameters.Count > 0 ? parameters : null);
 
                 if (dt != null && dt.Rows.Count > 0)
                 {
@@ -99,10 +385,13 @@ ORDER BY AddDealer.DealerName ASC
                     displayTable.Columns.Add("Date", typeof(DateTime));
                     displayTable.Columns.Add("DealerName", typeof(string));
                     displayTable.Columns.Add("Vehicle", typeof(string));
+                    displayTable.Columns.Add("StockType", typeof(string));
+                    displayTable.Columns.Add("StockType2", typeof(string));
+                    displayTable.Columns.Add("StockType3", typeof(string));
                     displayTable.Columns.Add("Rate", typeof(decimal));
                     displayTable.Columns.Add("EntryType", typeof(string));
                     displayTable.Columns.Add("Litter", typeof(decimal));
-                    displayTable.Columns.Add("Amount", typeof(decimal));    // 🔹 NAYA COLUMN
+                    displayTable.Columns.Add("Amount", typeof(decimal));
                     displayTable.Columns.Add("Credit", typeof(decimal));
                     displayTable.Columns.Add("Debit", typeof(decimal));
                     displayTable.Columns.Add("TotalLitter", typeof(decimal));
@@ -114,113 +403,85 @@ ORDER BY AddDealer.DealerName ASC
 
                     foreach (DataRow row in dt.Rows)
                     {
-                        int dealerId = row["SDid"] != DBNull.Value ? Convert.ToInt32(row["SDid"]) : 0;
-                        int sid = row["SID"] != DBNull.Value ? Convert.ToInt32(row["SID"]) : 0;
-                        string dealerName = row["DealerName"] != DBNull.Value ? row["DealerName"].ToString() : "Unknown";
-
-                        decimal litterValue = row["Litter"] != DBNull.Value ? Convert.ToDecimal(row["Litter"]) : 0;
-                        string noteValue = row["Note"] != DBNull.Value ? row["Note"].ToString() : "";
-                        decimal signedLitter = StockDieselLitterHelper.GetSignedLitter(litterValue, noteValue);
-                        decimal displayLitter = StockDieselLitterHelper.GetDisplayLitter(litterValue, noteValue);
-                        string entryType = StockDieselLitterHelper.GetEntryType(litterValue, noteValue);
-                        string displayNote = StockDieselLitterHelper.StripMinusTag(noteValue);
-
-                        decimal creditValue = row["Credit"] != DBNull.Value ? Convert.ToDecimal(row["Credit"]) : 0;
-                        decimal debitValue = row["Debit"] != DBNull.Value ? Convert.ToDecimal(row["Debit"]) : 0;
-                        decimal rateValue = row["Rate"] != DBNull.Value ? Convert.ToDecimal(row["Rate"]) : 0;   // 🔹 rate alag
-
-                        if (!dealerTotals.ContainsKey(dealerId))
+                        try
                         {
-                            dealerTotals[dealerId] = (0, 0, 0);
-                            dealerNames[dealerId] = dealerName;
+                            int dealerId = row["SDid"] != DBNull.Value ? Convert.ToInt32(row["SDid"]) : 0;
+                            int sid = row["SID"] != DBNull.Value ? Convert.ToInt32(row["SID"]) : 0;
+                            string dealerName = row["DealerName"] != DBNull.Value ? row["DealerName"].ToString() : "Unknown";
+
+                            decimal litterValue = row["Litter"] != DBNull.Value ? Convert.ToDecimal(row["Litter"]) : 0;
+                            string noteValue = row["Note"] != DBNull.Value ? row["Note"].ToString() : "";
+                            decimal signedLitter = StockDieselLitterHelper.GetSignedLitter(litterValue, noteValue);
+                            decimal displayLitter = StockDieselLitterHelper.GetDisplayLitter(litterValue, noteValue);
+                            string entryType = StockDieselLitterHelper.GetEntryType(litterValue, noteValue);
+                            string displayNote = StockDieselLitterHelper.StripMinusTag(noteValue);
+
+                            decimal creditValue = row["Credit"] != DBNull.Value ? Convert.ToDecimal(row["Credit"]) : 0;
+                            decimal debitValue = row["Debit"] != DBNull.Value ? Convert.ToDecimal(row["Debit"]) : 0;
+                            decimal rateValue = row["Rate"] != DBNull.Value ? Convert.ToDecimal(row["Rate"]) : 0;
+
+                            if (!dealerTotals.ContainsKey(dealerId))
+                            {
+                                dealerTotals[dealerId] = (0, 0, 0);
+                                dealerNames[dealerId] = dealerName;
+                            }
+
+                            dealerTotals[dealerId] = (
+                                dealerTotals[dealerId].totalLitter + signedLitter,
+                                dealerTotals[dealerId].totalCredit + creditValue,
+                                dealerTotals[dealerId].totalDebit + debitValue
+                            );
+
+                            DataRow newRow = displayTable.NewRow();
+                            newRow["Sr"] = displayTable.Rows.Count + 1;
+                            newRow["SID"] = sid;
+                            newRow["SDid"] = dealerId;
+
+                            DateTime rowDateVal;
+                            if (row["Date"] != DBNull.Value &&
+                                DateTime.TryParse(Convert.ToString(row["Date"]), out rowDateVal))
+                                newRow["Date"] = rowDateVal.Date;
+                            else
+                                newRow["Date"] = DBNull.Value;
+
+                            newRow["DealerName"] = dealerName;
+                            newRow["Vehicle"] = row["Vehicle"] != DBNull.Value ? row["Vehicle"].ToString() : "";
+                            newRow["StockType"] = row.Table.Columns.Contains("StockType") && row["StockType"] != DBNull.Value
+                                ? row["StockType"].ToString()
+                                : "";
+                            newRow["StockType2"] = row.Table.Columns.Contains("StockType2") && row["StockType2"] != DBNull.Value
+                                ? row["StockType2"].ToString()
+                                : "";
+                            newRow["StockType3"] = row.Table.Columns.Contains("StockType3") && row["StockType3"] != DBNull.Value
+                                ? row["StockType3"].ToString()
+                                : "";
+                            newRow["Rate"] = rateValue;
+                            newRow["EntryType"] = entryType;
+                            newRow["Litter"] = displayLitter;
+                            decimal amountValue = creditValue != 0 ? creditValue : (displayLitter * rateValue);
+                            newRow["Amount"] = amountValue;
+                            newRow["Credit"] = creditValue;
+                            newRow["Debit"] = debitValue;
+                            newRow["Note"] = displayNote;
+                            displayTable.Rows.Add(newRow);
                         }
-
-                        dealerTotals[dealerId] = (
-                            dealerTotals[dealerId].totalLitter + signedLitter,
-                            dealerTotals[dealerId].totalCredit + creditValue,
-                            dealerTotals[dealerId].totalDebit + debitValue
-                        );
-
-                        DataRow newRow = displayTable.NewRow();
-                        newRow["Sr"] = displayTable.Rows.Count + 1;
-                        newRow["SID"] = sid;
-                        newRow["SDid"] = dealerId;
-                        newRow["Date"] = row["Date"] != DBNull.Value
-                                            ? Convert.ToDateTime(row["Date"])
-                                            : DateTime.MinValue;
-                        newRow["DealerName"] = dealerName;
-                        newRow["Vehicle"] = row["Vehicle"] != DBNull.Value ? row["Vehicle"].ToString() : "";
-                        newRow["Rate"] = rateValue;
-                        newRow["EntryType"] = entryType;
-                        newRow["Litter"] = displayLitter;
-                        newRow["Amount"] = displayLitter * rateValue;
-                        newRow["Credit"] = creditValue;
-                        newRow["Debit"] = debitValue;
-                        newRow["Note"] = displayNote;
-                        displayTable.Rows.Add(newRow);
+                        catch
+                        {
+                            // aik row fail ho to baqi entries grid mein aati rahein
+                        }
                     }
 
-                    // Dealer-wise total row (TotalLitter / Balance) – Amount ko yahan 0 hi rehne do
-                    foreach (var dealerId in dealerTotals.Keys.ToList())
-                    {
-                        DataRow totalRow = displayTable.NewRow();
-                        totalRow["Sr"] = displayTable.Rows.Count + 1;
-                        totalRow["SDid"] = dealerId;
-                        totalRow["DealerName"] = dealerNames[dealerId];
-                        totalRow["TotalLitter"] = dealerTotals[dealerId].totalLitter;
-                        totalRow["Balance"] = dealerTotals[dealerId].totalDebit - dealerTotals[dealerId].totalCredit;
-                        // totalRow["Amount"] by default 0 / null
-                        displayTable.Rows.Add(totalRow);
-                    }
+                    for (int i = 0; i < displayTable.Rows.Count; i++)
+                        displayTable.Rows[i]["Sr"] = i + 1;
 
-                    guna2DataGridView1.DataSource = displayTable;
-
-                    if (guna2DataGridView1.Columns.Contains("Sr"))
-                        guna2DataGridView1.Columns["Sr"].HeaderText = "S/N";
-
-                    if (guna2DataGridView1.Columns.Contains("DealerName"))
-                        guna2DataGridView1.Columns["DealerName"].HeaderText = "Dealer Name";
-
-                    if (guna2DataGridView1.Columns.Contains("EntryType"))
-                    {
-                        guna2DataGridView1.Columns["EntryType"].HeaderText = "Type";
-                        guna2DataGridView1.Columns["EntryType"].DisplayIndex = 6;
-                    }
-
-                    if (guna2DataGridView1.Columns.Contains("TotalLitter"))
-                    {
-                        guna2DataGridView1.Columns["TotalLitter"].HeaderText = "Total Litter";
-                        guna2DataGridView1.Columns["TotalLitter"].DefaultCellStyle.Format = "F2";
-                    }
-
-                    if (guna2DataGridView1.Columns.Contains("Balance"))
-                    {
-                        guna2DataGridView1.Columns["Balance"].HeaderText = "Balance";
-                        guna2DataGridView1.Columns["Balance"].DefaultCellStyle.Format = "F2";
-                    }
-
-                    // 🔹 Naya Amount column header + format
-                    if (guna2DataGridView1.Columns.Contains("Amount"))
-                    {
-                        guna2DataGridView1.Columns["Amount"].HeaderText = "Amount (Ltr x Rate)";
-                        guna2DataGridView1.Columns["Amount"].DefaultCellStyle.Format = "F2";
-                    }
-
-                    if (guna2DataGridView1.Columns.Contains("SID"))
-                        guna2DataGridView1.Columns["SID"].Visible = false;
-
-                    if (guna2DataGridView1.Columns.Contains("SDid"))
-                        guna2DataGridView1.Columns["SDid"].Visible = false;
+                    // VIP Stock: dealer total rows mat dikhao — sirf real entries
+                    BindStockPartyGrid(displayTable);
                 }
                 else
                 {
-                    guna2DataGridView1.DataSource = null;
+                    // Empty bind bhi columns reset — warna delete ke baad naya save hide
+                    BindStockPartyGrid(new DataTable());
                     UpdateStockSummaryLabels();
-                }
-
-                foreach (DataGridViewColumn column in guna2DataGridView1.Columns)
-                {
-                    column.SortMode = DataGridViewColumnSortMode.NotSortable;
                 }
 
                 UpdateStockSummaryLabels();
@@ -258,8 +519,9 @@ ORDER BY AddDealer.DealerName ASC
 
                 frmStockDieselAdd frm = new frmStockDieselAdd();
                 frm.id = id; // Set the ID for editing
-                frm.ShowDialog(); // Open the add form in edit mode
-                LoadData1(); // Reload data after closing the add form
+                frm.ShowDialog(this); // Open the add form in edit mode
+                try { ReloadStockNameFilter(); } catch { }
+                RefreshPartyStockGrid(DateTime.Now);
 
                 try
                 {
@@ -414,7 +676,7 @@ ORDER BY AddDealer.DealerName ASC
         {
             try
             {
-                CalculateAverageDiselRate();
+                LoadData1();
             }
             catch (Exception ex)
             {
@@ -422,5 +684,6 @@ ORDER BY AddDealer.DealerName ASC
                 err.ShowDialog();
             }
         }
+      
     }
 }

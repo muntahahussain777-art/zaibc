@@ -24,13 +24,16 @@ namespace ZaibPetroleumService.Model
         private decimal oldAddDisel = 0m;
         private decimal oldRate = 0m;
         private int oldDealerId = 0;
+        // Vehicle suggest ke baad user dealer change kar sake
+        private bool _suggestingDealer;
+        private bool _dealerPickedManually;
+        private string _lastSuggestedVehicle = "";
         // ========================================================
 
         private void frmStockAdd_Load(object sender, EventArgs e)
         {
             SetupMinusLitterControls();
-            BringMinusControlsToFront();
-            Shown += (s, ev) => BringMinusControlsToFront();
+            ApplyDealerAmountVipMode();
 
             PopulateDealerNames();           // Existing code
             if (id == 0)
@@ -48,26 +51,48 @@ namespace ZaibPetroleumService.Model
             txtRate.TextChanged += txtRate_TextChanged;
 
             this.KeyPreview = true;  // Taki Ctrl+1, Ctrl+2 capture ho sake
+            this.KeyDown -= frmStockAdd_KeyDown;
             this.KeyDown += frmStockAdd_KeyDown; // KeyDown event attach
 
             txtDealerName.Visible = false; // By default hidden
+            txtDealerName.TextChanged -= txtDealerName_TextChanged;
             txtDealerName.TextChanged += txtDealerName_TextChanged; // Apna event
+            if (cbDealer != null)
+            {
+                cbDealer.SelectedIndexChanged -= CbDealer_UserChanged;
+                cbDealer.SelectedIndexChanged += CbDealer_UserChanged;
+                cbDealer.SelectionChangeCommitted -= CbDealer_UserChanged;
+                cbDealer.SelectionChangeCommitted += CbDealer_UserChanged;
+                cbDealer.Enabled = true;
+            }
 
             BeginInvoke(new Action(() =>
             {
+                ApplyDealerVipLayout();
                 txtvehicle.Focus();
                 txtvehicle.Select();
             }));
+        }
+
+        private void CbDealer_UserChanged(object sender, EventArgs e)
+        {
+            MarkDealerPickedManually();
         }
 
         private void txtvehicle_KeyDown(object sender, KeyEventArgs e)
         {
             try
             {
-                if (e.KeyCode == Keys.Enter)
+                if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Tab)
                 {
                     e.SuppressKeyPress = true;
+                    e.Handled = true;
+                    // Sirf suggest — pehle se selected / user-changed dealer overwrite NAHI
                     SuggestDealerByVehicle();
+                    // Roznamcha (StockDiesel) se Location / Item / Vehicle Model
+                    SuggestVipFromRoznamchaVehicle();
+                    // Vehicle → seedha Amount (phir Tab se Credit)
+                    try { FocusDealerVipAfterVehicle(); } catch { }
                 }
             }
             catch (Exception ex)
@@ -79,17 +104,14 @@ namespace ZaibPetroleumService.Model
 
         private void txtvehicle_Leave(object sender, EventArgs e)
         {
-            try
-            {
-                SuggestDealerByVehicle();
-            }
-            catch (Exception ex)
-            {
-                ErrorFormMessage errorMessage = new ErrorFormMessage("Error (txtvehicle_Leave): " + ex.Message, "Error");
-                errorMessage.ShowDialog();
-            }
+            // Dealer overwrite nahi — sirf Roznamcha VIP fields
+            try { SuggestVipFromRoznamchaVehicle(); } catch { }
         }
 
+        /// <summary>
+        /// Vehicle se dealer suggest. Agar dealer pehle se selected hai ya user ne change kiya
+        /// to kabhi overwrite nahi — wahi dealer save hoga jo combo mein dikh raha hai.
+        /// </summary>
         private void SuggestDealerByVehicle()
         {
             try
@@ -98,19 +120,45 @@ namespace ZaibPetroleumService.Model
                 if (string.IsNullOrEmpty(vehicle))
                     return;
 
+                bool hasDealer = cbDealer != null && cbDealer.SelectedValue != null && cbDealer.SelectedIndex >= 0;
+                bool sameVehicle = string.Equals(vehicle, _lastSuggestedVehicle, StringComparison.OrdinalIgnoreCase);
+
+                // Same vehicle + dealer pehle se set → kabhi overwrite nahi (user change safe)
+                if (hasDealer && sameVehicle)
+                    return;
+
+                // Nayi vehicle lekin user ne dealer khud choose kiya → uska dealer rehne do
+                if (hasDealer && _dealerPickedManually)
+                    return;
+
+                DateTime entryDate = DateTime.Today;
+                try
+                {
+                    if (txtdate != null)
+                        entryDate = txtdate.Value.Date;
+                }
+                catch { entryDate = DateTime.Today; }
+
+                // Same date latest → else on/before date → else overall latest (COUNT nahi)
                 string qry = @"
             SELECT 
                 s.DealerId,
-                d.DealerName,
-                COUNT(*) AS UseCount
+                d.DealerName
             FROM AddStock s
             INNER JOIN AddDealer d ON d.Did = s.DealerId
-            WHERE TRIM(IFNULL(s.Vehicle, '')) = @veh
-            GROUP BY s.DealerId, d.DealerName
-            ORDER BY UseCount DESC
+            WHERE TRIM(IFNULL(s.Vehicle, '')) = @veh COLLATE NOCASE
+            ORDER BY
+              CASE WHEN date(s.Date) = date(@entryDate) THEN 0 ELSE 1 END,
+              CASE WHEN date(s.Date) <= date(@entryDate) THEN 0 ELSE 1 END,
+              date(s.Date) DESC,
+              s.Sid DESC
             LIMIT 1";
 
-                Hashtable ht = new Hashtable { { "@veh", vehicle } };
+                Hashtable ht = new Hashtable
+                {
+                    { "@veh", vehicle },
+                    { "@entryDate", entryDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) }
+                };
                 DataTable dt = MainClass.ExecuteSelectQuery(qry, ht);
 
                 if (dt != null && dt.Rows.Count > 0)
@@ -118,36 +166,106 @@ namespace ZaibPetroleumService.Model
                     int dealerId = Convert.ToInt32(dt.Rows[0]["DealerId"]);
                     string dealerName = dt.Rows[0]["DealerName"].ToString();
 
+                    _suggestingDealer = true;
                     if (cbDealer.DataSource != null)
                         cbDealer.SelectedValue = dealerId;
+                    if (txtDealerName != null)
+                        txtDealerName.Text = dealerName;
+                    _suggestingDealer = false;
 
-                    txtDealerName.Text = dealerName;
+                    _lastSuggestedVehicle = vehicle;
+                    _dealerPickedManually = false;
                 }
             }
             catch (Exception ex)
             {
+                _suggestingDealer = false;
                 ErrorFormMessage errorMessage = new ErrorFormMessage("Error (SuggestDealerByVehicle): " + ex.Message, "Error");
                 errorMessage.ShowDialog();
             }
+        }
+
+        /// <summary>Save/Delete ke baad Dealer Name + Date fix — jab tak user change na kare.</summary>
+        private void ResetAfterSaveKeepDealerAndDate()
+        {
+            int keepDid = 0;
+            string keepName = "";
+            DateTime keepDate = DateTime.Now;
+            try
+            {
+                if (cbDealer != null && cbDealer.SelectedValue != null && cbDealer.SelectedValue != DBNull.Value
+                    && !(cbDealer.SelectedValue is DataRowView))
+                    keepDid = Convert.ToInt32(cbDealer.SelectedValue);
+                else if (cbDealer != null && cbDealer.SelectedItem is DataRowView drv && drv["Did"] != DBNull.Value)
+                    keepDid = Convert.ToInt32(drv["Did"]);
+            }
+            catch { }
+            try { keepName = (txtDealerName != null ? txtDealerName.Text : "") ?? ""; } catch { }
+            try { if (txtdate != null) keepDate = txtdate.Value; } catch { }
+
+            MainClass.Enable_reset_keep_date(this, txtdate);
+            ResetVipFieldsAfterSave();
+
+            try { if (txtdate != null) txtdate.Value = keepDate; } catch { }
+            try
+            {
+                if (keepDid > 0 && cbDealer != null && cbDealer.DataSource != null)
+                {
+                    _suggestingDealer = true;
+                    cbDealer.SelectedValue = keepDid;
+                    _suggestingDealer = false;
+                    _dealerPickedManually = true;
+                }
+                if (txtDealerName != null && !string.IsNullOrWhiteSpace(keepName))
+                    txtDealerName.Text = keepName.Trim();
+            }
+            catch { _suggestingDealer = false; }
+
+            try { RefreshDealerVehicleAutoSuggest(); } catch { }
+        }
+
+        private void MarkDealerPickedManually()
+        {
+            if (_suggestingDealer) return;
+            _dealerPickedManually = true;
+        }
+
+        /// <summary>Save se pehle jo dealer combo mein selected hai wahi ID.</summary>
+        private int ResolveSelectedDealerId()
+        {
+            if (cbDealer?.SelectedValue != null)
+            {
+                try { return Convert.ToInt32(cbDealer.SelectedValue); }
+                catch { }
+            }
+            // Ctrl+1 text mode: naam se resolve
+            string name = (txtDealerName != null && txtDealerName.Visible)
+                ? (txtDealerName.Text ?? "").Trim()
+                : (cbDealer?.Text ?? "").Trim();
+            if (string.IsNullOrEmpty(name)) return 0;
+            DataTable dt = cbDealer?.DataSource as DataTable;
+            if (dt == null) return 0;
+            foreach (DataRow row in dt.Rows)
+            {
+                if (string.Equals((row["DealerName"]?.ToString() ?? "").Trim(), name, StringComparison.OrdinalIgnoreCase))
+                    return Convert.ToInt32(row["Did"]);
+            }
+            return 0;
         }
 
         private void frmStockAdd_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Control)
             {
-                if (e.KeyCode == Keys.D1) // Ctrl + 1
+                if (e.KeyCode == Keys.D1) // Ctrl + 1 — text mode
                 {
-                    // TextBox show, ComboBox hide
-                    txtDealerName.Visible = true;
-                    cbDealer.Visible = false;
-                    txtDealerName.Focus();
+                    e.SuppressKeyPress = true;
+                    EnterDealerVipFastText();
                 }
-                else if (e.KeyCode == Keys.D2) // Ctrl + 2
+                else if (e.KeyCode == Keys.D2) // Ctrl + 2 — combo mode
                 {
-                    // ComboBox show, TextBox hide
-                    txtDealerName.Visible = false;
-                    cbDealer.Visible = true;
-                    cbDealer.Focus();
+                    e.SuppressKeyPress = true;
+                    ExitDealerVipFastText();
                 }
             }
         }
@@ -178,8 +296,9 @@ namespace ZaibPetroleumService.Model
                     oldAddDisel = Convert.ToDecimal(row["AddDisel"]);
                     // ========================================================
 
-                    // NAYA: edit mode me bhi preview amount dikhao
-                    UpdateLitterRateAmount();
+                    LoadVipFieldsFromRow(row);
+                    if (!_amountManual)
+                        UpdateLitterRateAmount();
                 }
                 else
                 {
@@ -235,6 +354,7 @@ namespace ZaibPetroleumService.Model
 
         private void txtDealerName_TextChanged(object sender, EventArgs e)
         {
+            MarkDealerPickedManually();
             string enteredName = txtDealerName.Text.Trim();
             if (!string.IsNullOrEmpty(enteredName))
             {
@@ -247,20 +367,23 @@ namespace ZaibPetroleumService.Model
 
                     if (rows.Length > 0)
                     {
-                        // EXACT match mila → set combobox
+                        _suggestingDealer = true;
                         cbDealer.SelectedValue = rows[0]["Did"];
+                        _suggestingDealer = false;
                     }
                     else
                     {
-                        // match na mila → reset
+                        _suggestingDealer = true;
                         cbDealer.SelectedIndex = -1;
+                        _suggestingDealer = false;
                     }
                 }
             }
             else
             {
-                // user ne sab text hata dia
+                _suggestingDealer = true;
                 cbDealer.SelectedIndex = -1;
+                _suggestingDealer = false;
             }
         }
 
@@ -269,6 +392,8 @@ namespace ZaibPetroleumService.Model
         {
             try
             {
+                if (_amountManual) return;
+
                 decimal addLitter = ParseLitterOrZero(txtAddDisel.Text);
                 decimal minusLitter = ParseLitterOrZero(txtMinusDisel?.Text);
                 decimal netLitter = addLitter - minusLitter;
@@ -276,23 +401,23 @@ namespace ZaibPetroleumService.Model
 
                 if (netLitter == 0 || string.IsNullOrWhiteSpace(rateText))
                 {
-                    txtlitterRateAmount.Text = string.Empty;
+                    if (!_amountManual)
+                        txtlitterRateAmount.Text = string.Empty;
                     return;
                 }
 
-                if (decimal.TryParse(rateText, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal rate))
+                if (decimal.TryParse(rateText.Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal rate))
                 {
                     decimal amount = netLitter * rate;
-                    txtlitterRateAmount.Text = amount.ToString("N2", CultureInfo.InvariantCulture);
-                }
-                else
-                {
-                    txtlitterRateAmount.Text = string.Empty;
+                    txtlitterRateAmount.TextChanged -= TxtAmount_TextChanged;
+                    txtlitterRateAmount.Text = string.Format(CultureInfo.InvariantCulture, "{0:N0}", amount);
+                    txtlitterRateAmount.TextChanged += TxtAmount_TextChanged;
                 }
             }
             catch
             {
-                txtlitterRateAmount.Text = string.Empty;
+                if (!_amountManual)
+                    txtlitterRateAmount.Text = string.Empty;
             }
         }
         // =============================================================
@@ -300,7 +425,9 @@ namespace ZaibPetroleumService.Model
         // ================== SAVE BUTTON ==================
         protected override void btnSave_Click(object sender, EventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(cbDealer.Text) || cbDealer.SelectedValue == null)
+            // Jo dealer ab combo mein selected hai — wahi save (vehicle suggest overwrite nahi)
+            int dealerId = ResolveSelectedDealerId();
+            if (dealerId <= 0)
             {
                 CustomeMessage validationMessage = new CustomeMessage("Valid dealer select karein!", "Warning");
                 validationMessage.ShowDialog();
@@ -314,36 +441,42 @@ namespace ZaibPetroleumService.Model
                 return;
             }
 
-            if (!decimal.TryParse(txtRate.Text, out decimal rate))
+            decimal.TryParse((txtRate.Text ?? "").Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal rate);
+
+            decimal addDisel = 0m;
+            try { addDisel = GetNetLitterForSave(out string litterError); if (!string.IsNullOrEmpty(litterError)) addDisel = ParseLitterOrZero(txtAddDisel.Text); }
+            catch { addDisel = ParseLitterOrZero(txtAddDisel.Text); }
+
+            decimal credit = GetVipCredit();
+            decimal amount = GetVipAmountDirect();
+            if (amount <= 0 && addDisel != 0 && rate > 0)
+                amount = addDisel * rate;
+
+            if (amount <= 0 && credit <= 0 && addDisel == 0)
             {
-                CustomeMessage validationMessage = new CustomeMessage("Valid Rate daalein!", "Warning");
+                CustomeMessage validationMessage = new CustomeMessage("Litter+Rate, Amount, ya Credit daalein!", "Warning");
                 validationMessage.ShowDialog();
                 return;
             }
+            // Net effect on DDAmount = Amount − Credit (Dealer Payout credit yahan bhi)
+            decimal newAmount = amount - credit;
 
-            decimal addDisel = GetNetLitterForSave(out string litterError);
-            if (!string.IsNullOrEmpty(litterError))
-            {
-                CustomeMessage validationMessage = new CustomeMessage(litterError, "Warning");
-                validationMessage.ShowDialog();
-                return;
-            }
-
-            int dealerId = Convert.ToInt32(cbDealer.SelectedValue);
-            decimal newAmount = rate * addDisel;   // naya amount (liter * rate)
+            string saleLoc = GetVipSaleLocation();
+            string saleItem = GetVipSaleItem();
+            string saleModel = GetVipSaleVehicleModel();
+            string saleInOut = GetVipSaleInOut();
 
             string qry;
             if (id == 0)
             {
-                // INSERT
-                qry = "INSERT INTO AddStock (Vehicle, Rate, AddDisel, Date, DealerId, Note) " +
-                      "VALUES (@vehicle, @rate, @adddisel, @date, @did, @note)";
+                qry = "INSERT INTO AddStock (Vehicle, Rate, AddDisel, Date, DealerId, Note, Credit, Amount, SaleLocation, SaleItem, SaleVehicleModel, SaleInOut) " +
+                      "VALUES (@vehicle, @rate, @adddisel, @date, @did, @note, @credit, @amount, @saleLoc, @saleItem, @saleModel, @saleInOut)";
             }
             else
             {
-                // UPDATE
                 qry = "UPDATE AddStock SET Vehicle = @vehicle, Rate = @rate, AddDisel = @adddisel, " +
-                      "Date = @date, DealerId = @did, Note = @note WHERE Sid = @id";
+                      "Date = @date, DealerId = @did, Note = @note, Credit = @credit, Amount = @amount, " +
+                      "SaleLocation=@saleLoc, SaleItem=@saleItem, SaleVehicleModel=@saleModel, SaleInOut=@saleInOut WHERE Sid = @id";
             }
 
             Hashtable ht = new Hashtable
@@ -354,7 +487,13 @@ namespace ZaibPetroleumService.Model
                 { "@rate", rate },
                 { "@adddisel", addDisel },
                 { "@date", specifiedDate.ToString("yyyy-MM-dd") },
-                { "@note", string.IsNullOrWhiteSpace(txtNote.Text) ? (object)DBNull.Value : txtNote.Text }
+                { "@note", string.IsNullOrWhiteSpace(txtNote.Text) ? (object)DBNull.Value : txtNote.Text },
+                { "@credit", credit },
+                { "@amount", amount },
+                { "@saleLoc", string.IsNullOrWhiteSpace(saleLoc) ? (object)DBNull.Value : saleLoc },
+                { "@saleItem", string.IsNullOrWhiteSpace(saleItem) ? (object)DBNull.Value : saleItem },
+                { "@saleModel", string.IsNullOrWhiteSpace(saleModel) ? (object)DBNull.Value : saleModel },
+                { "@saleInOut", saleInOut }
             };
 
             try
@@ -381,9 +520,7 @@ namespace ZaibPetroleumService.Model
                     DataRow old = LocalPersistence.ReadRow("AddStock", "Sid", saveId, conn, tx);
                     if (old == null) return false;
                     int authOldDealerId = Convert.ToInt32(old["DealerId"]);
-                    decimal authOldRate = Convert.ToDecimal(old["Rate"]);
-                    decimal authOldAdd = Convert.ToDecimal(old["AddDisel"]);
-                    decimal oldAmount = authOldRate * authOldAdd;
+                    decimal oldAmount = StockRowNetAmount(old);
 
                     if (MainClass.ExecInTx(qry, ht, conn, tx) <= 0) return false;
 
@@ -418,8 +555,9 @@ namespace ZaibPetroleumService.Model
                 {
                     CustomeMessage successMessage = new CustomeMessage("Entry save ho gayi!", "Success");
                     successMessage.ShowDialog();
-                    MainClass.Enable_reset_keep_date(this, txtdate);
+                    ResetAfterSaveKeepDealerAndDate();
                     id = 0;
+                    try { txtvehicle.Focus(); txtvehicle.Select(); } catch { }
                 }
                 else
                 {
@@ -472,15 +610,13 @@ namespace ZaibPetroleumService.Model
                             DataRow old = LocalPersistence.ReadRow("AddStock", "Sid", id, conn, tx);
                             if (old == null) return false;
                             int delDealerId = Convert.ToInt32(old["DealerId"]);
-                            decimal delRate = Convert.ToDecimal(old["Rate"]);
-                            decimal delAdd = Convert.ToDecimal(old["AddDisel"]);
                             string syncId = old.Table.Columns.Contains("SyncId") ? old["SyncId"]?.ToString() : null;
                             long? expectedRev = null;
                             if (old.Table.Columns.Contains("ServerRev") && old["ServerRev"] != DBNull.Value)
                             {
                                 try { long v = Convert.ToInt64(old["ServerRev"]); if (v > 0) expectedRev = v; } catch { }
                             }
-                            decimal ddAmountToSubtract = delRate * delAdd;
+                            decimal ddAmountToSubtract = StockRowNetAmount(old);
 
                             if (MainClass.ExecInTx(
                                     "DELETE FROM AddStock WHERE Sid = @id",
@@ -506,7 +642,7 @@ namespace ZaibPetroleumService.Model
                         {
                             CustomeMessage successMessage = new CustomeMessage("Record delete ho gaya!", "Success");
                             successMessage.ShowDialog();
-                            MainClass.Enable_reset_keep_date(this, txtdate);
+                            ResetAfterSaveKeepDealerAndDate();
                             id = 0;
                         }
                         else
@@ -527,6 +663,25 @@ namespace ZaibPetroleumService.Model
                 CustomeMessage noSelectionMessage = new CustomeMessage("Pehle ek record select karein!", "Warning");
                 noSelectionMessage.ShowDialog();
             }
+        }
+
+        /// <summary>AddStock row net = Amount − Credit (Amount fallback Litter×Rate).</summary>
+        private static decimal StockRowNetAmount(DataRow row)
+        {
+            if (row == null) return 0m;
+            decimal amount = 0m;
+            if (row.Table.Columns.Contains("Amount") && row["Amount"] != DBNull.Value)
+                amount = Convert.ToDecimal(row["Amount"]);
+            if (amount == 0m)
+            {
+                decimal r = row.Table.Columns.Contains("Rate") && row["Rate"] != DBNull.Value ? Convert.ToDecimal(row["Rate"]) : 0m;
+                decimal l = row.Table.Columns.Contains("AddDisel") && row["AddDisel"] != DBNull.Value ? Convert.ToDecimal(row["AddDisel"]) : 0m;
+                amount = r * l;
+            }
+            decimal credit = 0m;
+            if (row.Table.Columns.Contains("Credit") && row["Credit"] != DBNull.Value)
+                credit = Convert.ToDecimal(row["Credit"]);
+            return amount - credit;
         }
 
         private void UpdateDealerDAmount(int Did, decimal ddAmount)
@@ -566,6 +721,7 @@ namespace ZaibPetroleumService.Model
         private void txtAddDisel_TextChanged(object sender, EventArgs e)
         {
             FormatPositiveLitterBox(txtAddDisel);
+            _amountManual = false;
             UpdateLitterRateAmount();
         }
 
@@ -596,6 +752,7 @@ namespace ZaibPetroleumService.Model
         // NAYA: jab rate change ho, preview update
         private void txtRate_TextChanged(object sender, EventArgs e)
         {
+            _amountManual = false;
             UpdateLitterRateAmount();
         }
     }

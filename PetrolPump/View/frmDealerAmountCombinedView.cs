@@ -16,9 +16,12 @@ namespace ZaibPetroleumService.View
     /// </summary>
     public partial class frmDealerAmountCombinedView : SampleView
     {
+        private bool _busy;
+
         public frmDealerAmountCombinedView()
         {
             InitializeComponent();
+            DealerGridBind.AttachDgvOnly(guna2DataGridView1);
         }
 
         private void frmDealerAmountCombinedView_Load(object sender, EventArgs e)
@@ -26,13 +29,22 @@ namespace ZaibPetroleumService.View
             this.Text = "Dealer Ledger";
             if (label1 != null)
                 label1.Text = "Dealer Ledger";
+            _busy = true;
             dtpStart.Value = DateTime.Now;
             dtpEnd.Value = DateTime.Now;
-            LoadData();
+            Reload();
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            DealerGridBind.StripDgvOnly(guna2DataGridView1);
+            _busy = false;
         }
 
         public override void btnAdd_Click(object sender, EventArgs e)
         {
+            if (_busy) return;
             using (var pick = new Form())
             {
                 pick.Text = "Add Dealer Entry";
@@ -79,22 +91,31 @@ namespace ZaibPetroleumService.View
                 pick.AcceptButton = btnPayout;
 
                 DialogResult choice = pick.ShowDialog(this);
-                if (choice == DialogResult.Yes)
+                if (choice == DialogResult.Cancel || choice == DialogResult.None)
+                    return;
+
+                _busy = true;
+                try
                 {
-                    var frm = new frmDieselLedgerDealerAdd();
-                    if (frm.ShowDialog() == DialogResult.OK)
-                        LoadData();
+                    if (choice == DialogResult.Yes)
+                    {
+                        var frm = new frmDieselLedgerDealerAdd();
+                        frm.ShowDialog();
+                    }
+                    else if (choice == DialogResult.No)
+                    {
+                        var frm = new FrmDirectDealerPaymentAmountAdd();
+                        frm.ShowDialog();
+                    }
+                    else if (choice == DialogResult.Retry)
+                    {
+                        var frm = new frmStockAdd();
+                        frm.ShowDialog();
+                    }
                 }
-                else if (choice == DialogResult.No)
+                finally
                 {
-                    var frm = new FrmDirectDealerPaymentAmountAdd();
-                    if (frm.ShowDialog() == DialogResult.OK)
-                        LoadData();
-                }
-                else if (choice == DialogResult.Retry)
-                {
-                    var frm = new frmStockAdd();
-                    frm.ShowDialog();
+                    _busy = false;
                     LoadData();
                 }
             }
@@ -102,22 +123,30 @@ namespace ZaibPetroleumService.View
 
         private void dtpStart_ValueChanged(object sender, EventArgs e)
         {
-            LoadData();
+            if (_busy) return;
+            Reload();
         }
 
         private void dtpEnd_ValueChanged(object sender, EventArgs e)
         {
-            LoadData();
+            if (_busy) return;
+            Reload();
         }
 
         private void txtSearch_TextChanged(object sender, EventArgs e)
         {
-            LoadData();
+            if (_busy) return;
+            Reload();
         }
 
         public override void txtSearch_TextChanged_1(object sender, EventArgs e) { }
 
         private void LoadData()
+        {
+            Reload();
+        }
+
+        private void Reload()
         {
             string searchText = (txtSearch.Text ?? string.Empty).Trim();
             DateTime startDate = dtpStart.Value.Date;
@@ -151,7 +180,7 @@ SELECT * FROM (
     0 AS Rate,
     IFNULL(DL.Note, '') AS Note
   FROM DieselLedgerCredit DL
-  LEFT JOIN AddDealer DA ON DL.Did = DA.Did
+  LEFT JOIN (SELECT Did, MAX(DealerName) AS DealerName FROM AddDealer GROUP BY Did) DA ON DL.Did = DA.Did
   UNION ALL
   SELECT
     DL.LedgerID AS LedgerID,
@@ -166,7 +195,7 @@ SELECT * FROM (
     0 AS Rate,
     IFNULL(DL.Note, '') AS Note
   FROM DieselLedgerDebit DL
-  LEFT JOIN AddDealer DA ON DL.Did = DA.Did
+  LEFT JOIN (SELECT Did, MAX(DealerName) AS DealerName FROM AddDealer GROUP BY Did) DA ON DL.Did = DA.Did
   UNION ALL
   SELECT
     S.Sid AS LedgerID,
@@ -181,7 +210,7 @@ SELECT * FROM (
     IFNULL(S.Rate, 0) AS Rate,
     IFNULL(S.Note, '') AS Note
   FROM AddStock S
-  LEFT JOIN AddDealer DA ON S.DealerId = DA.Did
+  LEFT JOIN (SELECT Did, MAX(DealerName) AS DealerName FROM AddDealer GROUP BY Did) DA ON S.DealerId = DA.Did
 ) x
 WHERE 1=1";
 
@@ -203,19 +232,29 @@ ORDER BY IFNULL(x.DealerName,'' ) COLLATE NOCASE, date(x.Date) ASC, CASE x.Kind 
                     }
                     else
                     {
-                        cmd.CommandText = unionCore + @"
-  AND (
-        IFNULL(x.DealerName, '') LIKE @SearchLike
-        OR IFNULL(x.Note, '') LIKE @SearchLike
-      )
+                        int? exactDid = TryGetExactDealerId(con, searchText);
+                        if (exactDid.HasValue)
+                        {
+                            cmd.CommandText = unionCore + @"
+  AND x.Did = @DealerId
+ORDER BY date(x.Date) ASC, CASE x.Kind WHEN 'Dealer Amount' THEN 1 WHEN 'Direct' THEN 2 ELSE 3 END, x.LedgerID ASC";
+                            cmd.Parameters.AddWithValue("@DealerId", exactDid.Value);
+                        }
+                        else
+                        {
+                            cmd.CommandText = unionCore + @"
+  AND IFNULL(x.DealerName, '') LIKE @SearchLike
 ORDER BY IFNULL(x.DealerName,'' ) COLLATE NOCASE, date(x.Date) ASC, CASE x.Kind WHEN 'Dealer Amount' THEN 1 WHEN 'Direct' THEN 2 ELSE 3 END, x.LedgerID ASC";
-                        cmd.Parameters.AddWithValue("@SearchLike", "%" + searchText + "%");
+                            cmd.Parameters.AddWithValue("@SearchLike", "%" + searchText + "%");
+                        }
                     }
 
                     using (var da = new SQLiteDataAdapter(cmd))
                         da.Fill(dt);
                 }
             }
+
+            RemoveDuplicateLedgerRows(dt);
 
             if (!dt.Columns.Contains("Balance"))
                 dt.Columns.Add("Balance", typeof(decimal));
@@ -237,6 +276,35 @@ ORDER BY IFNULL(x.DealerName,'' ) COLLATE NOCASE, date(x.Date) ASC, CASE x.Kind 
 
             ApplyRunningBalances(dt, openings);
             return dt;
+        }
+
+        private static int? TryGetExactDealerId(SQLiteConnection con, string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            using (var cmd = new SQLiteCommand(
+                "SELECT Did FROM AddDealer WHERE TRIM(DealerName) = @Name COLLATE NOCASE LIMIT 1", con))
+            {
+                cmd.Parameters.AddWithValue("@Name", name.Trim());
+                object result = cmd.ExecuteScalar();
+                if (result == null || result == DBNull.Value) return null;
+                return Convert.ToInt32(result);
+            }
+        }
+
+        private static void RemoveDuplicateLedgerRows(DataTable dt)
+        {
+            if (dt == null || dt.Rows.Count == 0) return;
+            if (!dt.Columns.Contains("Kind") || !dt.Columns.Contains("LedgerID")) return;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < dt.Rows.Count; )
+            {
+                string key = Convert.ToString(dt.Rows[i]["Kind"]) + "|" + Convert.ToString(dt.Rows[i]["LedgerID"]);
+                if (!seen.Add(key))
+                    dt.Rows.RemoveAt(i);
+                else
+                    i++;
+            }
         }
 
         /// <summary>Opening = (Direct + Stock litter×rate) − Payout before start date.</summary>
@@ -311,35 +379,28 @@ SELECT
 
         private void BindGrid(DataTable dt)
         {
+            if (dt == null) dt = new DataTable();
             guna2DataGridView1.SuspendLayout();
             try
             {
-                guna2DataGridView1.AutoGenerateColumns = false;
+                DealerGridBind.ForceNoAuto(guna2DataGridView1);
                 guna2DataGridView1.DataSource = null;
-
-                void Map(string gridCol, string dataCol)
-                {
-                    if (!guna2DataGridView1.Columns.Contains(gridCol)) return;
-                    var col = guna2DataGridView1.Columns[gridCol];
-                    col.DataPropertyName = dt.Columns.Contains(dataCol) ? dataCol : string.Empty;
-                    col.Visible = gridCol != "dgvid" && gridCol != "dgvDid";
-                }
-
-                Map("dgvid", "LedgerID");
-                Map("dgvDid", "Did");
-                Map("dgvKind", "Kind");
-                Map("dgvName", "DealerName");
-                Map("dgvDate", "Date");
-                Map("dgvLitter", "Litter");
-                Map("dgvRate", "Rate");
-                Map("dgvStock", "StockAmt");
-                Map("dgvPayout", "Payout");
-                Map("dgvDirect", "Direct");
-                Map("dgvBalance", "Balance");
-                Map("dgvTotalBalance", "TotalBalance");
-                Map("dgvNote", "Note");
-
+                DealerGridBind.StripDgvOnly(guna2DataGridView1);
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvid", "LedgerID", false);
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvDid", "Did", false);
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvKind", "Kind");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvName", "DealerName");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvDate", "Date");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvLitter", "Litter");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvRate", "Rate");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvStock", "StockAmt");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvPayout", "Payout");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvDirect", "Direct");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvBalance", "Balance");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvTotalBalance", "TotalBalance");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvNote", "Note");
                 guna2DataGridView1.DataSource = dt;
+                DealerGridBind.StripDgvOnly(guna2DataGridView1);
                 MainClass.SrNo(guna2DataGridView1);
             }
             finally
@@ -421,7 +482,7 @@ SELECT
 
         private void guna2DataGridView1_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
         {
-            MainClass.SrNo(guna2DataGridView1);
+            if (e.ColumnIndex < 0 || e.ColumnIndex >= guna2DataGridView1.Columns.Count) return;
             if (guna2DataGridView1.Columns[e.ColumnIndex].Name == "dgvBalance" && e.Value != null && e.Value != DBNull.Value)
             {
                 try

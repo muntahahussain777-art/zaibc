@@ -14,11 +14,27 @@ namespace ZaibPetroleumService.ReportForm
         private DataTable _lastCustomerData;
         private DataTable _lastDealerData;
         private TwoTableReportTempEntryController _tempEntries;
+        private decimal? _pendingAssets;
 
         public TwoTableJoiningReport()
         {
             InitializeComponent();
             _tempEntries = new TwoTableReportTempEntryController(this, reportViewer1, RefreshReportFromCache);
+        }
+
+        public TwoTableJoiningReport(decimal assetsAmount) : this()
+        {
+            _pendingAssets = assetsAmount;
+        }
+
+        public void ApplyAssetsLine(decimal amount)
+        {
+            if (_tempEntries == null || amount == 0m)
+                return;
+            var side = amount < 0m
+                ? TwoTableReportTempSide.Payable
+                : TwoTableReportTempSide.Receivable;
+            _tempEntries.AddOrReplace("assets", amount, side);
         }
 
         private void btnSearch_Click(object sender, EventArgs e)
@@ -87,6 +103,11 @@ namespace ZaibPetroleumService.ReportForm
             todate.Value = DateTime.Now;    // Default date
             this.reportViewer1.RefreshReport();
             LoadAllRecords();
+            if (_pendingAssets.HasValue)
+            {
+                ApplyAssetsLine(_pendingAssets.Value);
+                _pendingAssets = null;
+            }
         }
 
         private void LoadAllRecords()

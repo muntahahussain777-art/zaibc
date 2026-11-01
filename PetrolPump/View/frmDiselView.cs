@@ -8,6 +8,7 @@ using System.Data;
 using System.Data.SQLite;
 using System.Data.SqlClient;
 using System.Drawing;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -37,17 +38,15 @@ namespace ZaibPetroleumService.View
 
         private void frmDiselView_Load(object sender, EventArgs e)
         {
+            try { ApplyDailyVipGridUi(); } catch { }
             EnableGridDoubleBuffering();
             EnsureQueryIndex();
 
-            comboBox1.Visible = true;
-            btnAverage.Visible = true;
+            // Average band — date filters rahenge (VIP)
+            try { if (comboBox1 != null) comboBox1.Visible = false; } catch { }
+            try { if (btnAverage != null) btnAverage.Visible = false; } catch { }
             dtpStart.Value = DateTime.Now;
             dtpEnd.Value = DateTime.Now;
-
-            comboBox1.Items.Clear();
-            comboBox1.Items.Add("Rate");
-            comboBox1.SelectedIndex = 0;
 
             _searchDebounceTimer.Interval = 400;
             _searchDebounceTimer.Tick += (s, ev) =>
@@ -81,6 +80,7 @@ namespace ZaibPetroleumService.View
                 using (var con = new SQLiteConnection(projectconnection.conReturn()))
                 {
                     con.Open();
+                    try { Services.DatabaseSchemaManager.EnsureProfessionalSchema(con); } catch { }
                     using (var cmd1 = new SQLiteCommand(
                         "CREATE INDEX IF NOT EXISTS idx_PetrolAdd_Date_Initial ON PetrolAdd(Date, IsInitialEntry)", con))
                         cmd1.ExecuteNonQuery();
@@ -142,7 +142,50 @@ namespace ZaibPetroleumService.View
         public override void btnAdd_Click(object sender, EventArgs e)
         {
             frmDiselAdd frm = new frmDiselAdd();
-            frm.ShowDialog();
+            frm.id = 0;
+            frm.ShowDialog(this);
+            // Save ke dauran pehle se refresh — yahan halka reload
+            try { LoadData1(); } catch { }
+        }
+
+        /// <summary>Add/Edit/Delete ke baad — date filter mein entry dikhe (Roznamcha jaisa, race nahi).</summary>
+        public void RefreshAfterChildSave(DateTime entryDate)
+        {
+            try
+            {
+                DateTime d = entryDate.Date;
+                DateTime today = DateTime.Today;
+
+                try
+                {
+                    dtpStart.ValueChanged -= DatePickers_ValueChanged;
+                    dtpEnd.ValueChanged -= DatePickers_ValueChanged;
+                }
+                catch { }
+
+                try
+                {
+                    if (dtpStart != null && dtpStart.Value.Date > d)
+                        dtpStart.Value = d;
+                    if (dtpStart != null && dtpStart.Value.Date > today)
+                        dtpStart.Value = today;
+                    if (dtpEnd != null && dtpEnd.Value.Date < d)
+                        dtpEnd.Value = d;
+                    if (dtpEnd != null && dtpEnd.Value.Date < today)
+                        dtpEnd.Value = today;
+                }
+                catch { }
+
+                try
+                {
+                    dtpStart.ValueChanged -= DatePickers_ValueChanged;
+                    dtpEnd.ValueChanged -= DatePickers_ValueChanged;
+                    dtpStart.ValueChanged += DatePickers_ValueChanged;
+                    dtpEnd.ValueChanged += DatePickers_ValueChanged;
+                }
+                catch { }
+            }
+            catch { }
             LoadData1();
         }
 
@@ -159,7 +202,16 @@ namespace ZaibPetroleumService.View
                 endDate = tmp;
             }
 
-            Task.Run(() => FetchPetrolData(searchText, startDate, endDate))
+            string locF = "";
+            string itemF = "";
+            string modelF = "";
+            string inOutF = "";
+            try { locF = GetDailyVipLocFilter(); } catch { }
+            try { itemF = GetDailyVipItemFilter(); } catch { }
+            try { modelF = GetDailyVipModelFilter(); } catch { }
+            try { inOutF = GetDailyVipInOutFilter(); } catch { }
+
+            Task.Run(() => FetchPetrolData(searchText, startDate, endDate, locF, itemF, modelF, inOutF))
                 .ContinueWith(t =>
                 {
                     if (token != _loadToken || IsDisposed) return;
@@ -173,12 +225,18 @@ namespace ZaibPetroleumService.View
                 }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
-        private static DataTable FetchPetrolData(string searchText, DateTime startDate, DateTime endDate)
+        private static DataTable FetchPetrolData(
+            string searchText, DateTime startDate, DateTime endDate,
+            string locFilter = "", string itemFilter = "", string modelFilter = "", string inOutFilter = "")
         {
             searchText = (searchText ?? string.Empty).Trim();
+            locFilter = (locFilter ?? "").Trim();
+            itemFilter = (itemFilter ?? "").Trim();
+            modelFilter = (modelFilter ?? "").Trim();
+            inOutFilter = (inOutFilter ?? "").Trim();
             // Sale + Credit dono. Credit entry (IsInitialEntry=0): Credit column mein wasooli.
-            // Running Balance = true customer cumulative through this row (full history), same VIP formula.
-            // Works for date filter, search, vehicle filter — never starts from 0 mid-ledger.
+            // Running Balance = full-history cumulative — SAME formula as Amount + CreditVal columns
+            // (Litter×Rate+Adv when both > 0, else Amount+Adv) − Credit. Date/search pe 0 se start nahi.
             const string vipRunningBalanceSql = @"
 (SELECT IFNULL(SUM(
            CASE
@@ -212,6 +270,10 @@ SELECT PetrolAdd.pid,
        PetrolAdd.Date,
        PetrolAdd.ReceiptNo,
        PetrolAdd.vehicle,
+       IFNULL(PetrolAdd.SaleLocation,'') AS SaleLocation,
+       IFNULL(PetrolAdd.SaleItem,'') AS SaleItem,
+       IFNULL(PetrolAdd.SaleVehicleModel,'') AS SaleVehicleModel,
+       IFNULL(NULLIF(TRIM(IFNULL(PetrolAdd.SaleInOut,'')),''),'In') AS SaleInOut,
        IFNULL(PetrolAdd.Litter, 0) AS Litter,
        IFNULL(PetrolAdd.Rate, 0) AS Rate,
        IFNULL(PetrolAdd.Advance, 0) AS Advance,
@@ -231,16 +293,19 @@ SELECT PetrolAdd.pid,
        END AS CreditVal,
        CAST(" + vipRunningBalanceSql + @" AS DECIMAL(18, 3)) AS Balance,
        CAST(NULL AS REAL) AS TotalBalance,
-       CASE
-           WHEN IFNULL(PetrolAdd.IsInitialEntry, 1) = 0 AND IFNULL(TRIM(PetrolAdd.Note), '') = ''
-               THEN 'Credit Customer'
-           ELSE IFNULL(PetrolAdd.Note, '')
-       END AS Note,
+       IFNULL(PetrolAdd.Note, '') AS Note,
        AddCustomer.Name,
        IFNULL(PetrolAdd.IsInitialEntry, 1) AS IsInitialEntry
 FROM PetrolAdd
 INNER JOIN AddCustomer ON PetrolAdd.CustomerId = AddCustomer.id
 WHERE 1=1";
+
+            // VIP filters — Location / Item / Vehicle Model / In-Out (All = empty)
+            const string vipFilterSql = @"
+  AND (@LocFilter = '' OR TRIM(IFNULL(PetrolAdd.SaleLocation,'')) = @LocFilter)
+  AND (@ItemFilter = '' OR TRIM(IFNULL(PetrolAdd.SaleItem,'')) = @ItemFilter)
+  AND (@ModelFilter = '' OR TRIM(IFNULL(PetrolAdd.SaleVehicleModel,'')) = @ModelFilter)
+  AND (@InOutFilter = '' OR IFNULL(NULLIF(TRIM(IFNULL(PetrolAdd.SaleInOut,'')),''),'In') = @InOutFilter)";
 
             var dt = new DataTable();
             using (var con = new SQLiteConnection(projectconnection.conReturn()))
@@ -249,44 +314,47 @@ WHERE 1=1";
                 string qry;
                 var cmd = new SQLiteCommand { Connection = con };
 
+                void BindVipFilters()
+                {
+                    cmd.Parameters.AddWithValue("@LocFilter", locFilter);
+                    cmd.Parameters.AddWithValue("@ItemFilter", itemFilter);
+                    cmd.Parameters.AddWithValue("@ModelFilter", modelFilter);
+                    cmd.Parameters.AddWithValue("@InOutFilter", inOutFilter);
+                }
+
+                // Date range hamesha — search khali ya Name/Vehicle dono cases mein
+                const string dateFilterSql = @"
+  AND date(PetrolAdd.Date) >= date(@StartDate)
+  AND date(PetrolAdd.Date) <= date(@EndDate)";
+
                 if (string.IsNullOrEmpty(searchText))
                 {
-                    // Bina search: date range (Balance still full running through each row)
-                    qry = selectCore + @"
-  AND date(PetrolAdd.Date) >= date(@StartDate)
-  AND date(PetrolAdd.Date) <= date(@EndDate)
+                    qry = selectCore + vipFilterSql + dateFilterSql + @"
 ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC";
                     cmd.CommandText = qry;
                     cmd.Parameters.AddWithValue("@StartDate", startDate.ToString("yyyy-MM-dd"));
                     cmd.Parameters.AddWithValue("@EndDate", endDate.ToString("yyyy-MM-dd"));
+                    BindVipFilters();
                 }
                 else
                 {
-                    // Search active: poori history — date filter nahi; naam sirf exact match (amount mix nahi)
+                    // Name (exact) OR Vehicle No — + date pickers dono saath
                     string searchLike = "%" + searchText + "%";
                     int? exactCustomerId = TryGetExactCustomerId(con, searchText);
 
-                    if (exactCustomerId.HasValue)
-                    {
-                        qry = selectCore + @"
-  AND PetrolAdd.CustomerId = @CustomerId
-ORDER BY PetrolAdd.Date ASC, PetrolAdd.pid ASC";
-                        cmd.CommandText = qry;
-                        cmd.Parameters.AddWithValue("@CustomerId", exactCustomerId.Value);
-                    }
-                    else
-                    {
-                        // Customer name exact nahi — vehicle / receipt / note
-                        qry = selectCore + @"
+                    qry = selectCore + vipFilterSql + dateFilterSql + @"
   AND (
-        IFNULL(PetrolAdd.vehicle, '') LIKE @SearchLike
-        OR CAST(IFNULL(PetrolAdd.ReceiptNo, '') AS TEXT) LIKE @SearchLike
-        OR IFNULL(PetrolAdd.Note, '') LIKE @SearchLike
+        (@HasCustomer = 1 AND PetrolAdd.CustomerId = @CustomerId)
+        OR IFNULL(PetrolAdd.vehicle, '') LIKE @SearchLike COLLATE NOCASE
       )
 ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC";
-                        cmd.CommandText = qry;
-                        cmd.Parameters.AddWithValue("@SearchLike", searchLike);
-                    }
+                    cmd.CommandText = qry;
+                    cmd.Parameters.AddWithValue("@StartDate", startDate.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@EndDate", endDate.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@HasCustomer", exactCustomerId.HasValue ? 1 : 0);
+                    cmd.Parameters.AddWithValue("@CustomerId", exactCustomerId ?? 0);
+                    cmd.Parameters.AddWithValue("@SearchLike", searchLike);
+                    BindVipFilters();
                 }
 
                 using (cmd)
@@ -299,33 +367,51 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
         }
 
         /// <summary>
-        /// TotalBalance on first row of each customer = that customer's last running Balance in this grid.
+        /// Running Balance har row pe — Amount − Credit chain (jo grid pe dikhe) + full-history opening.
+        /// SQL Balance se pehli row ka opening nikaal ke Amount/CreditVal se dubara chalao —
+        /// taake Running Balance aur Amount/Credit hamesha match rahein.
         /// </summary>
         private static void ApplyCustomerGroupTotalBalance(DataTable dt)
         {
             if (dt == null || dt.Rows.Count == 0 || !dt.Columns.Contains("Balance")) return;
-
-            int groupStart = 0;
-            int prevCid = int.MinValue;
-            for (int i = 0; i <= dt.Rows.Count; i++)
+            if (!dt.Columns.Contains("TotalBalance")) return;
+            if (!dt.Columns.Contains("CustomerId") || !dt.Columns.Contains("Amount")
+                || !dt.Columns.Contains("CreditVal"))
             {
-                int cid = int.MinValue;
-                if (i < dt.Rows.Count && dt.Rows[i]["CustomerId"] != DBNull.Value)
-                    cid = Convert.ToInt32(dt.Rows[i]["CustomerId"]);
+                foreach (DataRow row in dt.Rows)
+                    row["TotalBalance"] = ToDec(row["Balance"]);
+                return;
+            }
 
-                if (i == dt.Rows.Count || (prevCid != int.MinValue && cid != prevCid))
+            int i = 0;
+            while (i < dt.Rows.Count)
+            {
+                if (dt.Rows[i]["CustomerId"] == DBNull.Value)
                 {
-                    int groupEnd = i - 1;
-                    if (groupEnd >= groupStart)
-                    {
-                        decimal lastBal = ToDec(dt.Rows[groupEnd]["Balance"]);
-                        for (int r = groupStart; r <= groupEnd; r++)
-                            dt.Rows[r]["TotalBalance"] = DBNull.Value;
-                        dt.Rows[groupStart]["TotalBalance"] = lastBal;
-                    }
-                    groupStart = i;
+                    dt.Rows[i]["TotalBalance"] = ToDec(dt.Rows[i]["Balance"]);
+                    i++;
+                    continue;
                 }
-                prevCid = cid;
+
+                int cid = Convert.ToInt32(dt.Rows[i]["CustomerId"]);
+                int start = i;
+                while (i < dt.Rows.Count
+                    && dt.Rows[i]["CustomerId"] != DBNull.Value
+                    && Convert.ToInt32(dt.Rows[i]["CustomerId"]) == cid)
+                    i++;
+                int end = i - 1;
+
+                decimal firstAmt = ToDec(dt.Rows[start]["Amount"]);
+                decimal firstCr = ToDec(dt.Rows[start]["CreditVal"]);
+                // SQL Balance = full history through first row; opening = that − first row delta
+                decimal run = ToDec(dt.Rows[start]["Balance"]) - firstAmt + firstCr;
+
+                for (int r = start; r <= end; r++)
+                {
+                    run += ToDec(dt.Rows[r]["Amount"]) - ToDec(dt.Rows[r]["CreditVal"]);
+                    dt.Rows[r]["Balance"] = run;
+                    dt.Rows[r]["TotalBalance"] = run;
+                }
             }
         }
 
@@ -377,10 +463,16 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
                     col.Visible = true;
                 }
 
+                ApplyDailyVipGridUi();
+
                 Map("dgvid", "pid");
                 Map("dgvDate", "Date");
                 Map("dgvreciptno", "ReceiptNo");
                 Map("dgvVechleNo", "vehicle");
+                Map("dgvSaleInOut", "SaleInOut");
+                Map("dgvSaleLocation", "SaleLocation");
+                Map("dgvSaleItem", "SaleItem");
+                Map("dgvSaleVehicleModel", "SaleVehicleModel");
                 Map("dgvLitter", "Litter");
                 Map("dgvrate", "Rate");
                 Map("dgvAdvance", "Advance");
@@ -398,8 +490,12 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
                         dt.Columns.Contains("CreditVal") ? "CreditVal" : "Credit";
                     guna2DataGridView1.Columns["dgvCredit"].MinimumWidth = 90;
                     guna2DataGridView1.Columns["dgvCredit"].Width = 110;
-                    guna2DataGridView1.Columns["dgvCredit"].DefaultCellStyle.ForeColor = Color.White;
-                    guna2DataGridView1.Columns["dgvCredit"].DefaultCellStyle.Format = "N2";
+                    guna2DataGridView1.Columns["dgvCredit"].DefaultCellStyle.ForeColor = Color.Red;
+                    guna2DataGridView1.Columns["dgvCredit"].DefaultCellStyle.Format = "N0";
+                    guna2DataGridView1.Columns["dgvCredit"].DefaultCellStyle.Font =
+                        new Font("Segoe UI Semibold", 11.25F, FontStyle.Bold);
+                    guna2DataGridView1.Columns["dgvCredit"].DefaultCellStyle.Alignment =
+                        DataGridViewContentAlignment.MiddleRight;
                     guna2DataGridView1.Columns["dgvCredit"].ValueType = typeof(decimal);
                 }
 
@@ -408,6 +504,7 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
                 // Guna/grid kabhi alias miss karta hai — Credit/Balance seedha DataRow se cell pe likho
                 ForceCreditCellsFromData();
                 ForceBalanceCellsFromData();
+                ForceRunningBalanceCellsFromData();
 
                 foreach (DataGridViewColumn c in guna2DataGridView1.Columns)
                 {
@@ -417,6 +514,8 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
 
                 MainClass.SrNo(guna2DataGridView1);
                 SetColumnOrder();
+                ApplyDailyVipColumnVisibilityAndOrder();
+                try { EnableQuickAmountCreditEdit(); } catch { }
             }
             finally
             {
@@ -458,6 +557,30 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
                 if (!(row.DataBoundItem is DataRowView drv)) continue;
                 if (!drv.Row.Table.Columns.Contains("Balance")) continue;
                 row.Cells["dgvBalance"].Value = ToDec(drv["Balance"]);
+            }
+        }
+
+        /// <summary>Running Balance column = har row ka cumulative (sale + simple credit) — 0 bhi dikhe.</summary>
+        private void ForceRunningBalanceCellsFromData()
+        {
+            if (!guna2DataGridView1.Columns.Contains("dgvTotalBalance")) return;
+
+            foreach (DataGridViewRow row in guna2DataGridView1.Rows)
+            {
+                if (row.IsNewRow) continue;
+                if (!(row.DataBoundItem is DataRowView drv)) continue;
+
+                decimal bal = 0m;
+                if (drv.Row.Table.Columns.Contains("TotalBalance") && drv["TotalBalance"] != DBNull.Value)
+                    bal = ToDec(drv["TotalBalance"]);
+                else if (drv.Row.Table.Columns.Contains("Balance") && drv["Balance"] != DBNull.Value)
+                    bal = ToDec(drv["Balance"]);
+
+                // DataRow + cell dono — binding miss pe bhi VIP Running Balance dikhe
+                if (drv.Row.Table.Columns.Contains("TotalBalance"))
+                    drv["TotalBalance"] = bal;
+
+                row.Cells["dgvTotalBalance"].Value = bal;
             }
         }
 
@@ -530,7 +653,22 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
             if (e.RowIndex < 0) return;
             string col = guna2DataGridView1.Columns[e.ColumnIndex].Name;
 
-            // Credit + Note → red (VIP). Value DataRow se force — binding miss pe bhi Credit dikhe.
+            // In/Out: Out → red + bada bold font
+            if (col == "dgvSaleInOut")
+            {
+                string io = (e.Value ?? "").ToString().Trim();
+                if (string.IsNullOrEmpty(io)) io = "In";
+                e.Value = io;
+                e.FormattingApplied = true;
+                e.CellStyle.Font = new Font("Segoe UI Semibold", 12F, FontStyle.Bold);
+                if (string.Equals(io, "Out", StringComparison.OrdinalIgnoreCase))
+                    e.CellStyle.ForeColor = Color.Red;
+                else
+                    e.CellStyle.ForeColor = Color.LightGreen;
+                return;
+            }
+
+            // Credit — Amount jaisa size/format (N0), red color VIP
             if (col == "dgvCredit")
             {
                 decimal c = 0m;
@@ -540,55 +678,59 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
                 else if (row.DataBoundItem is DataRowView drvOld && drvOld.Row.Table.Columns.Contains("Credit"))
                     c = ToDec(drvOld["Credit"]);
                 else if (e.Value != null && e.Value != DBNull.Value)
-                    decimal.TryParse(e.Value.ToString(), out c);
+                    decimal.TryParse(e.Value.ToString().Replace(",", ""), NumberStyles.Any,
+                        CultureInfo.InvariantCulture, out c);
 
-                e.Value = c.ToString("N2");
+                e.Value = c.ToString("N0", CultureInfo.GetCultureInfo("en-IN"));
                 e.FormattingApplied = true;
-                e.CellStyle.ForeColor = Color.White;
-                e.CellStyle.Font = new Font(guna2DataGridView1.Font, FontStyle.Bold);
-
-                // Credit Customer row highlight
-                if (row.DataBoundItem is DataRowView drv2 &&
-                    drv2.Row.Table.Columns.Contains("IsInitialEntry") &&
-                    ToDec(drv2["IsInitialEntry"]) == 0)
-                {
-                    e.CellStyle.BackColor = Color.FromArgb(60, 30, 35);
-                }
+                e.CellStyle.ForeColor = Color.Red;
+                e.CellStyle.Font = new Font("Segoe UI Semibold", 11.25F, FontStyle.Bold);
+                e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+                return;
+            }
+            if (col == "dgvAmount")
+            {
+                decimal a = 0m;
+                if (e.Value != null && e.Value != DBNull.Value)
+                    decimal.TryParse(e.Value.ToString().Replace(",", ""), NumberStyles.Any,
+                        CultureInfo.InvariantCulture, out a);
+                e.Value = a.ToString("N0", CultureInfo.GetCultureInfo("en-IN"));
+                e.FormattingApplied = true;
+                e.CellStyle.Font = new Font("Segoe UI Semibold", 11.25F, FontStyle.Bold);
+                e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
                 return;
             }
             if (col == "dgvNote")
             {
-                var row = guna2DataGridView1.Rows[e.RowIndex];
-                bool isCreditRow = row.DataBoundItem is DataRowView drvN &&
-                    drvN.Row.Table.Columns.Contains("IsInitialEntry") &&
-                    ToDec(drvN["IsInitialEntry"]) == 0;
-                if (isCreditRow || (e.Value != null && !string.IsNullOrWhiteSpace(e.Value.ToString())))
+                if (e.Value != null && !string.IsNullOrWhiteSpace(e.Value.ToString()))
                 {
                     e.CellStyle.ForeColor = Color.White;
                     e.CellStyle.Font = new Font(guna2DataGridView1.Font, FontStyle.Bold);
                 }
-                if (isCreditRow)
-                    e.CellStyle.BackColor = Color.FromArgb(60, 30, 35);
                 return;
             }
 
-            // Credit Customer rows — thora highlight (Amount/Litter bhi)
-            if (e.RowIndex >= 0 &&
-                guna2DataGridView1.Rows[e.RowIndex].DataBoundItem is DataRowView drvRow &&
-                drvRow.Row.Table.Columns.Contains("IsInitialEntry") &&
-                ToDec(drvRow["IsInitialEntry"]) == 0)
+            // VIP: Running Balance har row (0 / credit / sale) — hamesha dikhe
+            if (col == "dgvTotalBalance")
             {
-                e.CellStyle.BackColor = Color.FromArgb(60, 30, 35);
-            }
-
-            if ((col == "dgvBalance" || col == "dgvTotalBalance") && e.Value != null && e.Value != DBNull.Value)
-            {
-                if (decimal.TryParse(e.Value.ToString(), out decimal balanceValue))
+                decimal balanceValue = 0m;
+                if (e.Value != null && e.Value != DBNull.Value)
+                    decimal.TryParse(e.Value.ToString().Replace(",", ""), NumberStyles.Any,
+                        CultureInfo.InvariantCulture, out balanceValue);
+                else if (guna2DataGridView1.Rows[e.RowIndex].DataBoundItem is DataRowView drvRb)
                 {
-                    e.Value = balanceValue.ToString("N2");
-                    e.FormattingApplied = true;
-                    ApplyBalanceCellColor(e, balanceValue);
+                    if (drvRb.Row.Table.Columns.Contains("TotalBalance"))
+                        balanceValue = ToDec(drvRb["TotalBalance"]);
+                    else if (drvRb.Row.Table.Columns.Contains("Balance"))
+                        balanceValue = ToDec(drvRb["Balance"]);
                 }
+
+                e.Value = balanceValue.ToString("N0");
+                e.FormattingApplied = true;
+                e.CellStyle.Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold);
+                e.CellStyle.ForeColor = Color.FromArgb(212, 175, 55);
+                e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+                e.CellStyle.BackColor = Color.FromArgb(28, 32, 58);
             }
         }
 
@@ -616,27 +758,29 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
         private void guna2DataGridView1_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0 || guna2DataGridView1.CurrentRow == null) return;
+
+            // Amount / Credit → grid pe seedha edit (form mat kholo)
+            if (e.ColumnIndex >= 0)
+            {
+                string col = guna2DataGridView1.Columns[e.ColumnIndex].Name;
+                if (col == "dgvAmount" || col == "dgvCredit")
+                {
+                    try
+                    {
+                        guna2DataGridView1.CurrentCell = guna2DataGridView1.Rows[e.RowIndex].Cells[e.ColumnIndex];
+                        guna2DataGridView1.BeginEdit(true);
+                    }
+                    catch { }
+                    return;
+                }
+            }
+
             int id = Convert.ToInt32(guna2DataGridView1.CurrentRow.Cells["dgvid"].Value);
 
-            int isInitial = 1;
-            object raw = null;
-            if (guna2DataGridView1.CurrentRow.DataBoundItem is DataRowView drv &&
-                drv.Row.Table.Columns.Contains("IsInitialEntry"))
-                raw = drv.Row["IsInitialEntry"];
-            if (raw != null && raw != DBNull.Value)
-                isInitial = Convert.ToInt32(raw);
-
-            if (isInitial == 0)
-            {
-                var frm = new frmCreditAdjustAdd { id = id };
-                frm.ShowDialog();
-            }
-            else
-            {
-                var frm = new frmDiselAdd { id = id };
-                frm.ShowDialog();
-            }
-            LoadData1();
+            // Daily Diesel — baaki columns pe form edit
+            var frm = new frmDiselAdd { id = id };
+            frm.ShowDialog(this);
+            try { LoadData1(); } catch { }
         }
 
 
@@ -674,7 +818,7 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
                         if (customerIdForRepair > 0)
                             Services.BalanceConfirmationService.RecalculateCustomerPetrolBalances(customerIdForRepair);
                         MessageBox.Show("Record deleted successfully.");
-                        LoadData1();
+                        RefreshAfterChildSave(DateTime.Now);
                     }
                 }
             }
@@ -811,23 +955,37 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
 
         private void CalculateTotalLitter()
         {
-            decimal totalLitterSum = 0;
-            decimal totalAmountSum = 0;
-            decimal totalCreditSum = 0;
-            bool hasRow = false;
+            decimal totalIn = 0m;
+            decimal totalOut = 0m;
+            decimal totalCredit = 0m;
 
             foreach (DataGridViewRow row in guna2DataGridView1.Rows)
             {
                 if (row.IsNewRow) continue;
-                hasRow = true;
 
-                if (row.Cells["dgvLitter"].Value != null && row.Cells["dgvLitter"].Value != DBNull.Value)
-                    totalLitterSum += Convert.ToDecimal(row.Cells["dgvLitter"].Value);
-
+                decimal rowAmt = 0m;
                 if (row.Cells["dgvAmount"].Value != null && row.Cells["dgvAmount"].Value != DBNull.Value)
-                    totalAmountSum += Convert.ToDecimal(row.Cells["dgvAmount"].Value);
+                    rowAmt = ToDec(row.Cells["dgvAmount"].Value);
 
-                // Credit: pehle cell, warna DataRow CreditVal (summary 0 na ho)
+                string io = "In";
+                try
+                {
+                    if (guna2DataGridView1.Columns.Contains("dgvSaleInOut") &&
+                        row.Cells["dgvSaleInOut"].Value != null &&
+                        row.Cells["dgvSaleInOut"].Value != DBNull.Value)
+                        io = row.Cells["dgvSaleInOut"].Value.ToString().Trim();
+                    else if (row.DataBoundItem is DataRowView drvIo &&
+                             drvIo.Row.Table.Columns.Contains("SaleInOut"))
+                        io = (drvIo["SaleInOut"]?.ToString() ?? "").Trim();
+                }
+                catch { }
+                if (string.IsNullOrEmpty(io)) io = "In";
+
+                if (string.Equals(io, "Out", StringComparison.OrdinalIgnoreCase))
+                    totalOut += rowAmt;
+                else
+                    totalIn += rowAmt;
+
                 decimal rowCredit = 0m;
                 if (row.Cells["dgvCredit"].Value != null && row.Cells["dgvCredit"].Value != DBNull.Value)
                     rowCredit = ToDec(row.Cells["dgvCredit"].Value);
@@ -838,31 +996,29 @@ ORDER BY AddCustomer.Name COLLATE NOCASE, PetrolAdd.Date ASC, PetrolAdd.pid ASC"
                     else if (drvSum.Row.Table.Columns.Contains("Credit"))
                         rowCredit = ToDec(drvSum["Credit"]);
                 }
-                totalCreditSum += rowCredit;
+                totalCredit += rowCredit;
             }
 
-            lblLitter.Text = $"Total Litter: {totalLitterSum:F2} L";
-            lblAmount.Text = $"Total Amount: {totalAmountSum:F2}";
-
-            decimal periodNet = totalAmountSum - totalCreditSum;
-            // Footer = sirf is list ki period movement; Balance column = poori history running (SQL).
-            if (!string.IsNullOrWhiteSpace(txtSearch.Text) && hasRow)
+            decimal net = totalIn - totalOut - totalCredit;
+            try
             {
-                lblResult.Text =
-                    $"VIP period: Amount {totalAmountSum:F2} − Credit {totalCreditSum:F2} = {periodNet:F2}  |  Balance column = running";
-                lblResult.ForeColor = Color.FromArgb(255, 215, 0);
+                if (lblAmount != null)
+                {
+                    lblAmount.Text = $"In: {totalIn:N0}";
+                    lblAmount.ForeColor = Color.LightGreen;
+                }
+                if (lblResult != null)
+                {
+                    lblResult.Text = $"Out −{totalOut:N0}  |  Credit −{totalCredit:N0}";
+                    lblResult.ForeColor = Color.Red;
+                }
+                if (lblLitter != null)
+                {
+                    lblLitter.Text = $"Net: {net:N0}";
+                    lblLitter.ForeColor = Color.FromArgb(212, 175, 55);
+                }
             }
-            else if (hasRow)
-            {
-                lblResult.Text =
-                    $"Credit {totalCreditSum:F2}  |  Period net {periodNet:F2}  |  Balance column = full running";
-                lblResult.ForeColor = Color.White;
-            }
-            else
-            {
-                lblResult.Text = "0.00";
-                lblResult.ForeColor = Color.White;
-            }
+            catch { }
         }
 
     }

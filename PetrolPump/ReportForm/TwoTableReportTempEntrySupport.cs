@@ -49,6 +49,24 @@ namespace ZaibPetroleumService.ReportForm
 
         internal int Count => _entries.Count;
 
+        internal void AddOrReplace(string name, decimal amount, TwoTableReportTempSide side)
+        {
+            if (string.IsNullOrWhiteSpace(name) || amount == 0m)
+                return;
+            string key = name.Trim();
+            _entries.RemoveAll(x =>
+                x != null && string.Equals(x.Name, key, StringComparison.OrdinalIgnoreCase));
+            _entries.Add(new TwoTableReportTempEntry
+            {
+                Name = key,
+                Amount = amount,
+                Side = side
+            });
+            if (_lblInfo != null)
+                _lblInfo.Text = "Temp entries: " + _entries.Count + "  (report only)";
+            _refreshReport();
+        }
+
         private void BuildUi(Form form, ReportViewer reportViewer)
         {
             var panel = new Panel

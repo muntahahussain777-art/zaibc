@@ -43,7 +43,7 @@ namespace ZaibPetroleumService.Model
                 Name = "txtMinusLitter",
                 PlaceholderText = "Sale / Minus",
                 Size = new Size(95, txtlitter.Height),
-                TabIndex = 109,
+                TabIndex = 2,
                 Visible = true
             };
             txtMinusLitter.DisabledState.Parent = txtMinusLitter;
@@ -59,6 +59,10 @@ namespace ZaibPetroleumService.Model
             txtMinusLitter.TextChanged += MinusLitter_TextChanged;
             txtMinusLitter.Leave += MinusLitter_Leave;
             txtMinusLitter.KeyPress += PositiveLitter_KeyPress;
+
+            KeepLitterTextLeft(txtlitter);
+            KeepLitterTextLeft(txtMinusLitter);
+            KeepLitterTextLeft(txtRate);
 
             BringMinusControlsToFront();
         }
@@ -145,12 +149,48 @@ namespace ZaibPetroleumService.Model
 
         private void MinusLitter_TextChanged(object sender, EventArgs e)
         {
-            FormatPositiveLitterBox(txtMinusLitter);
+            KeepLitterCaretAtTypePosition(txtMinusLitter);
         }
 
         private void MinusLitter_Leave(object sender, EventArgs e)
         {
             FormatPositiveLitterBox(txtMinusLitter);
+        }
+
+        private static void KeepLitterTextLeft(Guna.UI2.WinForms.Guna2TextBox box)
+        {
+            if (box == null) return;
+            box.TextAlign = HorizontalAlignment.Left;
+            foreach (Control c in box.Controls)
+            {
+                var tb = c as TextBox;
+                if (tb != null)
+                    tb.TextAlign = HorizontalAlignment.Left;
+            }
+        }
+
+        private static void KeepLitterCaretAtTypePosition(Guna.UI2.WinForms.Guna2TextBox box)
+        {
+            if (box == null || !box.Focused) return;
+            box.TextAlign = HorizontalAlignment.Left;
+            int len = (box.Text ?? "").Length;
+            if (len > 0 && box.SelectionLength == len)
+            {
+                box.SelectionLength = 0;
+                box.SelectionStart = len;
+            }
+            foreach (Control c in box.Controls)
+            {
+                var tb = c as TextBox;
+                if (tb == null) continue;
+                int iLen = (tb.Text ?? "").Length;
+                tb.TextAlign = HorizontalAlignment.Left;
+                if (tb.Focused && iLen > 0 && tb.SelectionLength == iLen)
+                {
+                    tb.SelectionLength = 0;
+                    tb.SelectionStart = iLen;
+                }
+            }
         }
 
         private void FormatPositiveLitterBox(Guna.UI2.WinForms.Guna2TextBox box)
@@ -166,9 +206,9 @@ namespace ZaibPetroleumService.Model
                 string formatted = FormatLitter(Math.Abs(value));
                 if (formatted != box.Text)
                 {
-                    int sel = box.SelectionStart;
                     box.Text = formatted;
-                    box.SelectionStart = Math.Min(sel, box.Text.Length);
+                    box.SelectionStart = box.Text.Length;
+                    box.SelectionLength = 0;
                 }
             }
         }

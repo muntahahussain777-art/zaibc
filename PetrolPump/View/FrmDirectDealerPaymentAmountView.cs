@@ -7,14 +7,25 @@ namespace ZaibPetroleumService.View
 {
     public partial class FrmDirectDealerPaymentAmountView : SampleView
     {
+        private bool _busy;
+
         public FrmDirectDealerPaymentAmountView()
         {
             InitializeComponent();
+            DealerGridBind.AttachDgvOnly(guna2DataGridView1);
         }
 
         private void FrmDirectDealerPaymentAmountView_Load(object sender, EventArgs e)
         {
+            _busy = true;
             LoadLedgerEntries();
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            DealerGridBind.StripDgvOnly(guna2DataGridView1);
+            _busy = false;
         }
 
         public void LoadLedgerEntries()
@@ -29,33 +40,67 @@ namespace ZaibPetroleumService.View
                     DL.AmounGiven,
                     DL.Note
                 FROM DieselLedgerDebit DL
-                LEFT JOIN AddDealer DA ON DL.Did = DA.Did
+                LEFT JOIN (SELECT Did, MAX(DealerName) AS DealerName FROM AddDealer GROUP BY Did) DA ON DL.Did = DA.Did
                 WHERE IFNULL(DA.DealerName, '') LIKE '%" + searchText + @"%'
-                   OR IFNULL(DL.Note, '') LIKE '%" + searchText + @"%'
                 ORDER BY DL.LedgerID ASC";
 
-            DataTable dt = MainClass.GetData(query);
+            BindLedgerGrid(MainClass.GetData(query));
+        }
 
-            guna2DataGridView1.AutoGenerateColumns = true;
-            if (dt != null && dt.Rows.Count > 0)
+        private void BindLedgerGrid(DataTable dt)
+        {
+            if (dt == null) dt = new DataTable();
+            guna2DataGridView1.SuspendLayout();
+            try
             {
-                guna2DataGridView1.DataSource = dt;
-                if (guna2DataGridView1.Columns.Contains("dgvid"))
-                    guna2DataGridView1.Columns["dgvid"].DataPropertyName = "LedgerID";
-                if (guna2DataGridView1.Columns.Contains("LedgerID"))
-                    guna2DataGridView1.Columns["LedgerID"].Visible = false;
-                if (guna2DataGridView1.Columns.Contains("Did"))
-                    guna2DataGridView1.Columns["Did"].Visible = false;
-            }
-            else
+                DealerGridBind.ForceNoAuto(guna2DataGridView1);
                 guna2DataGridView1.DataSource = null;
+                DealerGridBind.StripDgvOnly(guna2DataGridView1);
+                EnsureLedgerColumns();
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvid", "LedgerID", false);
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvDate", "Date");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvName", "DealerName");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvAmount", "AmounGiven");
+                DealerGridBind.Map(guna2DataGridView1, dt, "dgvNote", "Note");
+                guna2DataGridView1.DataSource = dt;
+                DealerGridBind.StripDgvOnly(guna2DataGridView1);
+                MainClass.SrNo(guna2DataGridView1);
+            }
+            finally
+            {
+                guna2DataGridView1.ResumeLayout(true);
+            }
+        }
+
+        private void EnsureLedgerColumns()
+        {
+            AddCol("dgvDate", "Date", "Date");
+            AddCol("dgvName", "Dealer", "DealerName");
+            AddCol("dgvAmount", "Amount", "AmounGiven");
+            AddCol("dgvNote", "Note", "Note");
+        }
+
+        private void AddCol(string name, string header, string prop)
+        {
+            if (guna2DataGridView1.Columns.Contains(name))
+            {
+                guna2DataGridView1.Columns[name].DataPropertyName = prop;
+                return;
+            }
+            guna2DataGridView1.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = name,
+                HeaderText = header,
+                DataPropertyName = prop,
+                ReadOnly = true
+            });
         }
 
         public override void btnAdd_Click(object sender, EventArgs e)
         {
             FrmDirectDealerPaymentAmountAdd frmAdd = new FrmDirectDealerPaymentAmountAdd();
-            if (frmAdd.ShowDialog() == DialogResult.OK)
-                LoadLedgerEntries();
+            frmAdd.ShowDialog();
+            LoadLedgerEntries();
         }
 
         private void guna2DataGridView1_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
@@ -92,12 +137,12 @@ namespace ZaibPetroleumService.View
                     if (drv.Row.Table.Columns.Contains("LedgerID") && drv["LedgerID"] != DBNull.Value)
                         return Convert.ToInt32(drv["LedgerID"]);
                 }
-                if (row.DataGridView.Columns.Contains("LedgerID") && row.Cells["LedgerID"].Value != null &&
-                    row.Cells["LedgerID"].Value != DBNull.Value)
-                    return Convert.ToInt32(row.Cells["LedgerID"].Value);
                 if (row.DataGridView.Columns.Contains("dgvid") && row.Cells["dgvid"].Value != null &&
                     row.Cells["dgvid"].Value != DBNull.Value)
                     return Convert.ToInt32(row.Cells["dgvid"].Value);
+                if (row.DataGridView.Columns.Contains("LedgerID") && row.Cells["LedgerID"].Value != null &&
+                    row.Cells["LedgerID"].Value != DBNull.Value)
+                    return Convert.ToInt32(row.Cells["LedgerID"].Value);
             }
             catch { }
             return 0;
@@ -107,12 +152,12 @@ namespace ZaibPetroleumService.View
 
         private void txtSearch_TextChanged(object sender, EventArgs e)
         {
+            if (_busy) return;
             LoadLedgerEntries();
         }
 
         private void guna2DataGridView1_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
         {
-            MainClass.SrNo(guna2DataGridView1);
         }
     }
 }

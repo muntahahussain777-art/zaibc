@@ -1,4 +1,4 @@
-﻿using ZaibPetroleumService.Model;
+using ZaibPetroleumService.Model;
 using ZaibPetroleumService.ProjectConnection;
 using ZaibPetroleumService.ReportForm;
 using System;

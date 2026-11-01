@@ -224,7 +224,7 @@
             this.dtpEnd.ShadowDecoration.Parent = this.dtpEnd;
             this.dtpEnd.Size = new System.Drawing.Size(191, 36);
             this.dtpEnd.TabIndex = 193;
-            this.dtpEnd.Value = new System.DateTime(2024, 6, 21, 19, 54, 39, 787);
+            this.dtpEnd.Value = new System.DateTime(2026, 12, 31, 23, 59, 59, 0);
             // 
             // dtpStart
             // 
@@ -244,7 +244,7 @@
             this.dtpStart.ShadowDecoration.Parent = this.dtpStart;
             this.dtpStart.Size = new System.Drawing.Size(191, 36);
             this.dtpStart.TabIndex = 192;
-            this.dtpStart.Value = new System.DateTime(2024, 6, 21, 19, 54, 39, 787);
+            this.dtpStart.Value = new System.DateTime(2026, 1, 1, 0, 0, 0, 0);
             // 
             // comboBox1
             // 

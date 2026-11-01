@@ -25,6 +25,9 @@ namespace ZaibPetroleumService
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (Services.NameSuggestHelper.TryHandleKey(keyData))
+                return true;
+
             if (ReportPinHelper.TryHandleKey(this, keyData))
                 return true;
 
@@ -32,6 +35,14 @@ namespace ZaibPetroleumService
                 return true;
 
             return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            if (Services.FormNavigationService.TryHandle(keyData))
+                return true;
+
+            return base.ProcessDialogKey(keyData);
         }
     }
 }

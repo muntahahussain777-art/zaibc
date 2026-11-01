@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Data;
 using System.Globalization;
@@ -6,59 +6,340 @@ using System.Windows.Forms;
 
 namespace ZaibPetroleumService.Model
 {
-    public partial class frmStockDieselAdd : SampleAdd1
+    public partial class frmStockDieselAdd : SampleAdd1, IMessageFilter
     {
         public frmStockDieselAdd()
         {
             InitializeComponent();
             SetupMinusLitterControls();
+            Application.AddMessageFilter(this);
+            FormClosed += (s, e) =>
+            {
+                try { Application.RemoveMessageFilter(this); } catch { }
+            };
         }
 
         public int id = 0;
+        private const string StockDealerName = "Stock";
 
         private void frmStockDieselAdd_Load(object sender, EventArgs e)
         {
             SetupMinusLitterControls();
-            BringMinusControlsToFront();
-            Shown += (s, ev) => BringMinusControlsToFront();
+            ApplyPartyStockMode();
 
-            PopulateDealerNames();      // Existing code
-            if (id == 0)
-                txtdate.Value = DateTime.Now; // Existing code
-
-            if (id > 0)
+            Shown += (s, ev) =>
             {
-                LoadExistingRecord(id);
+                try
+                {
+                    ApplyPartyStockMode();
+                    if (id == 0)
+                    {
+                        PopulatePartyDealerNames();
+                        SelectRozNamchaDefault();
+                    }
+                    else
+                    {
+                        // Update: Name wahi rahe jo record mein hai (RozNamcha pe reset na ho)
+                        int keepDid = 0;
+                        try
+                        {
+                            if (cbDealer.SelectedValue != null && cbDealer.SelectedValue != DBNull.Value)
+                                keepDid = Convert.ToInt32(cbDealer.SelectedValue);
+                        }
+                        catch { }
+
+                        PopulatePartyDealerNames();
+                        if (keepDid > 0 && cbDealer.DataSource != null)
+                        {
+                            try { cbDealer.SelectedValue = keepDid; } catch { }
+                            if (cbDealer.SelectedIndex < 0)
+                                LoadExistingRecord(id);
+                        }
+                        else
+                            LoadExistingRecord(id);
+                    }
+                    FocusPartyVehicle();
+                }
+                catch { }
+            };
+
+            PopulatePartyDealerNames();
+            if (id == 0)
+            {
+                txtdate.Value = DateTime.Now;
+                SelectRozNamchaDefault();
             }
 
-            txtlitter.Leave += new EventHandler(txtlitter_TextChanged);
+            if (id > 0)
+                LoadExistingRecord(id);
+
+            txtlitter.Leave += new EventHandler(txtlitter_Leave);
             txtlitter.TextChanged += new EventHandler(txtlitter_TextChanged);
 
-            // 🔹 KeyPreview for Ctrl+1 / Ctrl+2
             this.KeyPreview = true;
             this.KeyDown += frmStockDieselAdd_KeyDown;
 
-            // 🔹 TextBox by default hidden
             txtDealerName.Visible = false;
-
-            // 🔹 AutoComplete text changed event
             txtDealerName.TextChanged += txtDealerName_TextChanged;
+
+            BeginInvoke(new Action(FocusPartyVehicle));
+        }
+
+        private int FindStockDealerId()
+        {
+            var ht = new Hashtable { { "@n", StockDealerName } };
+            DataTable dt = MainClass.ExecuteSelectQuery(
+                "SELECT Did FROM AddDealer WHERE TRIM(IFNULL(DealerName,'')) = @n COLLATE NOCASE LIMIT 1", ht);
+            if (dt == null || dt.Rows.Count == 0 || dt.Rows[0]["Did"] == DBNull.Value)
+                return 0;
+            return Convert.ToInt32(dt.Rows[0]["Did"]);
+        }
+
+        private void EnsureStockDealerExists()
+        {
+            try
+            {
+                if (FindStockDealerId() > 0)
+                    return;
+
+                var ht = new Hashtable
+                {
+                    { "@name", StockDealerName },
+                    { "@Amount", 0 },
+                    { "@DAmount", 0 },
+                    { "@date", DateTime.Now.ToString("yyyy-MM-dd") }
+                };
+                MainClass.DataInsertUpdateDelete(
+                    "INSERT INTO AddDealer (DealerName, DDAmount, DAmount, Date) VALUES (@name, @Amount, @DAmount, @date)",
+                    ht);
+            }
+            catch { }
+        }
+
+        private void SelectStockDealer()
+        {
+            try
+            {
+                int did = FindStockDealerId();
+                if (did <= 0) return;
+                if (cbDealer.DataSource != null)
+                    cbDealer.SelectedValue = did;
+                txtDealerName.Text = StockDealerName;
+                txtDealerName.Visible = false;
+                cbDealer.Visible = true;
+            }
+            catch { }
+        }
+
+        private void KeepDateAndStockDealer()
+        {
+            MainClass.Enable_reset_keep_date(this, txtdate);
+            id = 0;
+            SelectStockDealer();
+            FocusAddLitter();
+        }
+
+        private void ApplyLitterTabCycle()
+        {
+            txtlitter.TabStop = true;
+            txtlitter.TabIndex = 1;
+            if (txtMinusLitter != null)
+            {
+                txtMinusLitter.TabStop = true;
+                txtMinusLitter.TabIndex = 2;
+            }
+            txtRate.TabStop = true;
+            txtRate.TabIndex = 3;
+            txtNote.TabStop = true;
+            txtNote.TabIndex = 4;
+
+            txtvehicle.TabStop = false;
+            txtdate.TabStop = false;
+            cbDealer.TabStop = false;
+            txtDealerName.TabStop = false;
+            txtcredit.TabStop = false;
+            txtdebit.TabStop = false;
+            btnSave.TabStop = false;
+            btnDel.TabStop = false;
+            btnClose.TabStop = false;
+            if (lblMinusLitter != null)
+                lblMinusLitter.TabStop = false;
+
+            StopInnerTab(txtvehicle);
+            StopInnerTab(txtdate);
+            StopInnerTab(cbDealer);
+            StopInnerTab(txtDealerName);
+            StopInnerTab(txtcredit);
+            StopInnerTab(txtdebit);
+            StopInnerTab(txtlitter);
+            StopInnerTab(txtMinusLitter);
+            StopInnerTab(txtRate);
+            StopInnerTab(txtNote);
+        }
+
+        private static void StopInnerTab(Control box)
+        {
+            if (box == null) return;
+            foreach (Control c in box.Controls)
+            {
+                c.TabStop = false;
+                StopInnerTab(c);
+            }
+        }
+
+        private void FocusAddLitter()
+        {
+            try
+            {
+                if (txtlitter == null || txtlitter.IsDisposed) return;
+                ActiveControl = txtlitter;
+                txtlitter.Focus();
+                txtlitter.SelectionStart = (txtlitter.Text ?? "").Length;
+                txtlitter.SelectionLength = 0;
+            }
+            catch { }
+        }
+
+        private Guna.UI2.WinForms.Guna2TextBox[] LitterTabCycle()
+        {
+            return new[] { txtlitter, txtMinusLitter, txtRate, txtNote };
+        }
+
+        private bool TryCycleLitterFields(bool reverse)
+        {
+            if (_partyMode)
+            {
+                // Fast text (Ctrl+1): Name + Type textboxes; else combos
+                Control[] cycle = GetPartyTabCycle();
+                int idx = -1;
+                for (int i = 0; i < cycle.Length; i++)
+                {
+                    if (cycle[i] != null && !cycle[i].IsDisposed && cycle[i].ContainsFocus)
+                    {
+                        idx = i;
+                        break;
+                    }
+                }
+                int next = idx < 0
+                    ? (reverse ? cycle.Length - 1 : 0)
+                    : (reverse ? (idx - 1 + cycle.Length) % cycle.Length : (idx + 1) % cycle.Length);
+                for (int n = 0; n < cycle.Length; n++)
+                {
+                    int i = reverse
+                        ? (next - n + cycle.Length) % cycle.Length
+                        : (next + n) % cycle.Length;
+                    var box = cycle[i];
+                    if (box == null || box.IsDisposed || !box.Visible || !box.Enabled) continue;
+                    try
+                    {
+                        box.Focus();
+                        return true;
+                    }
+                    catch { }
+                }
+                return false;
+            }
+
+            var cycleOld = LitterTabCycle();
+            int idxOld = -1;
+            for (int i = 0; i < cycleOld.Length; i++)
+            {
+                if (cycleOld[i] != null && !cycleOld[i].IsDisposed && cycleOld[i].ContainsFocus)
+                {
+                    idxOld = i;
+                    break;
+                }
+            }
+
+            int nextOld;
+            if (idxOld < 0)
+                nextOld = reverse ? cycleOld.Length - 1 : 0;
+            else
+                nextOld = reverse
+                    ? (idxOld - 1 + cycleOld.Length) % cycleOld.Length
+                    : (idxOld + 1) % cycleOld.Length;
+
+            for (int n = 0; n < cycleOld.Length; n++)
+            {
+                int i = reverse
+                    ? (nextOld - n + cycleOld.Length) % cycleOld.Length
+                    : (nextOld + n) % cycleOld.Length;
+                var box = cycleOld[i];
+                if (box == null || box.IsDisposed || !box.Visible || !box.Enabled)
+                    continue;
+                try
+                {
+                    box.Focus();
+                    box.SelectionStart = (box.Text ?? "").Length;
+                    box.SelectionLength = 0;
+                    return true;
+                }
+                catch { }
+            }
+            return false;
+        }
+
+        public bool PreFilterMessage(ref Message m)
+        {
+            const int WM_KEYDOWN = 0x0100;
+            if (m.Msg != WM_KEYDOWN) return false;
+            if (!Visible || IsDisposed) return false;
+            if (Form.ActiveForm != this) return false;
+            if ((Keys)m.WParam.ToInt32() != Keys.Tab) return false;
+            bool reverse = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
+            return TryCycleLitterFields(reverse);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            ApplyPartyStockMode();
+            BeginInvoke(new Action(FocusPartyVehicle));
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == Keys.Tab || keyData == (Keys.Shift | Keys.Tab))
+            {
+                if (TryCycleLitterFields(keyData == (Keys.Shift | Keys.Tab)))
+                    return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            if (keyData == Keys.Tab || keyData == (Keys.Shift | Keys.Tab))
+            {
+                if (TryCycleLitterFields(keyData == (Keys.Shift | Keys.Tab)))
+                    return true;
+            }
+            return base.ProcessDialogKey(keyData);
         }
 
         private void frmStockDieselAdd_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Control)
+            if (!e.Control) return;
+
+            if (e.KeyCode == Keys.D1)
             {
-                if (e.KeyCode == Keys.D1)
+                e.SuppressKeyPress = true;
+                if (_partyMode)
+                    EnterPartyFastTextMode();
+                else
                 {
-                    // Ctrl+1 → Show TextBox, Hide ComboBox
                     txtDealerName.Visible = true;
                     cbDealer.Visible = false;
                     txtDealerName.Focus();
                 }
-                else if (e.KeyCode == Keys.D2)
+            }
+            else if (e.KeyCode == Keys.D2)
+            {
+                e.SuppressKeyPress = true;
+                if (_partyMode)
+                    ExitPartyFastTextMode();
+                else
                 {
-                    // Ctrl+2 → Show ComboBox, Hide TextBox
                     txtDealerName.Visible = false;
                     cbDealer.Visible = true;
                     cbDealer.Focus();
@@ -82,32 +363,46 @@ namespace ZaibPetroleumService.Model
                     txtdate.Value = Convert.ToDateTime(row["Date"]);
                     txtvehicle.Text = row["Vehicle"].ToString();
 
-                    // 🔹 SAFE: agar SDid ka dealer ab AddDealer me nahi hai to form crash na kare
+                    // Stock party Name (StockPartyName.Pid = SDid) — update pe wahi name
+                    if (_partyMode)
+                        PopulatePartyDealerNames();
+
                     if (row["SDid"] != DBNull.Value)
                     {
                         int dealerId;
                         if (int.TryParse(row["SDid"].ToString(), out dealerId))
                         {
-                            cbDealer.SelectedValue = dealerId;
+                            try { cbDealer.SelectedValue = dealerId; } catch { }
 
                             if (cbDealer.SelectedIndex == -1)
                             {
-                                // Dealer delete ho chuka / nahi mil raha
-                                // ComboBox clear + textbox me sirf information dikhado (optional)
+                                string partyName = "";
+                                try
+                                {
+                                    DataTable pn = MainClass.ExecuteSelectQuery(
+                                        "SELECT PartyName FROM StockPartyName WHERE Pid = @id LIMIT 1",
+                                        new Hashtable { { "@id", dealerId } });
+                                    if (pn != null && pn.Rows.Count > 0)
+                                        partyName = Convert.ToString(pn.Rows[0]["PartyName"]) ?? "";
+                                }
+                                catch { }
+
                                 cbDealer.SelectedIndex = -1;
                                 txtDealerName.Visible = true;
                                 cbDealer.Visible = false;
-                                txtDealerName.Text = "(Missing Dealer ID: " + dealerId + ")";
+                                txtDealerName.Text = string.IsNullOrWhiteSpace(partyName)
+                                    ? "(Missing Name ID: " + dealerId + ")"
+                                    : partyName;
+                            }
+                            else
+                            {
+                                txtDealerName.Visible = false;
+                                cbDealer.Visible = true;
                             }
                         }
                     }
 
-                    LoadLitterBoxesFromRecord(
-                        Convert.ToDecimal(row["Litter"]),
-                        row["Note"] != DBNull.Value ? row["Note"].ToString() : "");
-                    txtRate.Text = row["Rate"].ToString();
-                    txtcredit.Text = string.Format(CultureInfo.InvariantCulture, "{0:N0}", row["Credit"]);
-                    txtdebit.Text = string.Format(CultureInfo.InvariantCulture, "{0:N0}", row["Debit"]);
+                    LoadPartyFieldsFromRow(row);
                 }
                 else
                 {
@@ -191,82 +486,23 @@ namespace ZaibPetroleumService.Model
 
         protected override void btnSave_Click(object sender, EventArgs e)
         {
-            // 🔹 1) Dealer selection strong validation
-            if (cbDealer.SelectedValue == null || cbDealer.SelectedIndex == -1)
-            {
-                CustomeMessage validationMessage = new CustomeMessage("Valid dealer select karein!", "Warning");
-                validationMessage.ShowDialog();
-                return;
-            }
-
-            int dealerId;
-            if (!int.TryParse(cbDealer.SelectedValue.ToString(), out dealerId) || dealerId <= 0)
-            {
-                CustomeMessage validationMessage = new CustomeMessage("Invalid dealer selected!", "Warning");
-                validationMessage.ShowDialog();
-                return;
-            }
-
-            // 🔹 2) Date validation
-            if (!DateTime.TryParse(txtdate.Text, out DateTime specifiedDate))
-            {
-                CustomeMessage validationMessage = new CustomeMessage("Date valid nahi hai!", "Warning");
-                validationMessage.ShowDialog();
-                return;
-            }
-
-            // 🔹 3) Numeric parsing (same as before)
-            decimal rate = decimal.TryParse(txtRate.Text.Replace(",", ""), out decimal parsedRate) ? parsedRate : 0;
-            if (!TryGetLitterSaveDetails(out decimal litterToSave, out bool isMinusEntry, out string litterError))
-            {
-                CustomeMessage validationMessage = new CustomeMessage(litterError, "Warning");
-                validationMessage.ShowDialog();
-                return;
-            }
-            decimal creditAmount = decimal.TryParse(txtcredit.Text.Replace(",", ""), out decimal parsedCredit) ? parsedCredit : 0;
-            decimal debitAmount = decimal.TryParse(txtdebit.Text.Replace(",", ""), out decimal parsedDebit) ? parsedDebit : 0;
-            string noteToSave = StockDieselLitterHelper.BuildNoteForSave(isMinusEntry, txtNote.Text);
-
-            string qry = id == 0
-                ? "INSERT INTO StockDiesel (Vehicle, Rate, Litter, Date, SDid, Credit, Debit, Note) " +
-                  "VALUES (@vehicle, @rate, @adddisel, @date, @did, @credit, @debit, @note)"
-                : "UPDATE StockDiesel SET Vehicle = @vehicle, Rate = @rate, Litter = @adddisel, Date = @date, " +
-                  "SDid = @did, Credit = @credit, Debit = @debit, Note = @note WHERE SID = @id";
-
-            // 🔹 4) @did hamesha valid int dealerId hoga
-            Hashtable ht = new Hashtable
-            {
-                { "@id", id },
-                { "@did", dealerId },
-                { "@vehicle", string.IsNullOrWhiteSpace(txtvehicle.Text) ? (object)DBNull.Value : txtvehicle.Text },
-                { "@rate", rate },
-                { "@adddisel", litterToSave },
-                { "@date", specifiedDate.ToString("yyyy-MM-dd") },
-                { "@credit", creditAmount },
-                { "@debit", debitAmount },
-                { "@note", string.IsNullOrWhiteSpace(noteToSave) ? (object)DBNull.Value : noteToSave }
-            };
-
+            // Stock menu se hamesha party (Roznamcha) save — purana AddDealer path nahi
             try
             {
-                int r = MainClass.DataInsertUpdateDelete(qry, ht);
-                if (r > 0)
-                {
-                    CustomeMessage successMessage = new CustomeMessage("Stock entry save ho gayi!", "Success");
-                    successMessage.ShowDialog();
-                    MainClass.Enable_reset_keep_date(this, txtdate);
-                    id = 0;
-                }
-                else
-                {
-                    ErrorFormMessage errorMessage = new ErrorFormMessage("Stock data save nahi hua!", "Error");
-                    errorMessage.ShowDialog();
-                }
+                ApplyPartyStockMode();
+                TrySavePartyStockEntry();
             }
             catch (Exception ex)
             {
-                ErrorFormMessage errorMessage = new ErrorFormMessage("Error: " + ex.Message, "Error");
-                errorMessage.ShowDialog();
+                try
+                {
+                    ErrorFormMessage errorMessage = new ErrorFormMessage("Error (Save): " + ex.Message, "Error");
+                    errorMessage.ShowDialog();
+                }
+                catch
+                {
+                    MessageBox.Show("Error (Save): " + ex.Message);
+                }
             }
         }
 
@@ -284,8 +520,34 @@ namespace ZaibPetroleumService.Model
                         {
                             CustomeMessage successMessage = new CustomeMessage("Record delete ho gaya!", "Success");
                             successMessage.ShowDialog();
-                            MainClass.Enable_reset_keep_date(this, txtdate);
                             id = 0;
+                            DateTime keepDate = DateTime.Now;
+                            int keepDid = 0;
+                            try { if (txtdate != null) keepDate = txtdate.Value; } catch { }
+                            try
+                            {
+                                if (cbDealer != null && cbDealer.SelectedValue != null
+                                    && cbDealer.SelectedValue != DBNull.Value
+                                    && !(cbDealer.SelectedValue is DataRowView))
+                                    keepDid = Convert.ToInt32(cbDealer.SelectedValue);
+                            }
+                            catch { }
+                            try
+                            {
+                                if (_partyMode)
+                                    ResetPartyAfterSaveKeepNameDate(keepDid, keepDate);
+                                else
+                                {
+                                    KeepDateAndStockDealer();
+                                    try { txtdate.Value = keepDate; } catch { }
+                                }
+                            }
+                            catch
+                            {
+                                KeepDateAndStockDealer();
+                                try { txtdate.Value = keepDate; } catch { }
+                            }
+                            try { NotifyStockViewRefresh(keepDate); } catch { }
                         }
                         else
                         {
@@ -314,7 +576,7 @@ namespace ZaibPetroleumService.Model
 
         private void txtlitter_TextChanged(object sender, EventArgs e)
         {
-            FormatPositiveLitterBox(txtlitter);
+            KeepLitterCaretAtTypePosition(txtlitter);
         }
 
         private void txtlitter_KeyPress(object sender, KeyPressEventArgs e)

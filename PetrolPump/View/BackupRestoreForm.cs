@@ -1,4 +1,5 @@
 ﻿using ZaibPetroleumService.ProjectConnection;
+using ZaibPetroleumService.Services;
 using System;
 using System.Data.SqlClient;
 using System.Data.SQLite;
@@ -19,9 +20,8 @@ namespace ZaibPetroleumService.View
         // Method to return the connection string for SQLite
         public static string conReturn()
         {
-            string appDataFolder = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string dbFolderPathAppData = Path.Combine(appDataFolder, "DiselPetrolPump");
-            string dbFilePath = Path.Combine(dbFolderPathAppData, "DiselPetrolPump.db");
+            string dbFolderPathAppData = LocalAppStorage.GetLocalDataDirectory();
+            string dbFilePath = LocalAppStorage.GetDatabaseFilePath();
 
             // Ensure directory exists and the database file exists
             if (!File.Exists(dbFilePath))
@@ -47,7 +47,7 @@ namespace ZaibPetroleumService.View
                 return;
             }
 
-            string backupFilePath = Path.Combine(txtBackupPath.Text, "DiselPetrolPump_backup.db");
+            string backupFilePath = Path.Combine(txtBackupPath.Text, LocalAppStorage.DatabaseFileName.Replace(".db", "_backup.db"));
 
             try
             {
@@ -83,11 +83,10 @@ namespace ZaibPetroleumService.View
         // Method to backup the SQLite database file to a new location using SQLite Backup API
         public static void BackupDatabase(string backupFilePath)
         {
-            string databaseFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiselPetrolPump", "DiselPetrolPump.db");
+            string databaseFilePath = LocalAppStorage.GetDatabaseFilePath();
 
             try
             {
-                // Create a backup connection
                 using (SQLiteConnection sourceConnection = new SQLiteConnection($@"Data Source={databaseFilePath};Version=3;"))
                 using (SQLiteConnection backupConnection = new SQLiteConnection($@"Data Source={backupFilePath};Version=3;"))
                 {
@@ -109,11 +108,10 @@ namespace ZaibPetroleumService.View
         // Method to restore the SQLite database file from a backup
         public static void RestoreDatabase(string restoreFilePath)
         {
-            string databaseFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiselPetrolPump", "DiselPetrolPump.db");
+            string databaseFilePath = LocalAppStorage.GetDatabaseFilePath();
 
             try
             {
-                // Ensure database is not in use (close connection if it's open)
                 using (SQLiteConnection con = new SQLiteConnection($@"Data Source={databaseFilePath};Version=3;"))
                 {
                     con.Open();

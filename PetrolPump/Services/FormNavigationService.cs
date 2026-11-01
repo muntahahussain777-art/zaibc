@@ -80,7 +80,7 @@ namespace ZaibPetroleumService.Services
             ReloadIfFileChanged();
 
             var sb = new StringBuilder();
-            sb.AppendLine("Ctrl + letter se form open hota hai.");
+            sb.AppendLine("Alt + letter se form open hota hai.");
             sb.AppendLine();
             if (_shortcuts.Count == 0)
             {
@@ -96,8 +96,8 @@ namespace ZaibPetroleumService.Services
             }
             sb.AppendLine();
             sb.AppendLine("F1  →  Ye list");
-            sb.AppendLine("Ctrl+N  →  Add (view screen)");
-            sb.AppendLine("Ctrl+S  →  Save (add form)");
+            sb.AppendLine("Alt+N  →  Add (view screen)");
+            sb.AppendLine("Alt+S  →  Save (add form)");
             sb.AppendLine("Esc  →  Add form band");
 
             MessageBox.Show(sb.ToString(), "Commands (F1)",
@@ -278,6 +278,8 @@ namespace ZaibPetroleumService.Services
                 if (!TryParseShortcut(shortcutText, out Keys keyData))
                     continue;
 
+                keyData = PreferAltOverCtrl(keyData);
+
                 _shortcuts.Add(new ShortcutEntry
                 {
                     KeyData = keyData,
@@ -292,26 +294,22 @@ namespace ZaibPetroleumService.Services
             try
             {
                 const string content = @"# Zaib Petroleum — Form Shortcuts
-# Sirf Ctrl + letter. Help: F1
+# Alt + letter. Help: F1
 
-Ctrl+D=frmDiselView|Daily Diesel Sales
-Ctrl+C=frmCreditAdjust|Credit Customer
-Ctrl+A=frmDealerNameView|Add Dealer
-Ctrl+P=frmDieselLedgerView|Dealer Payout
-Ctrl+M=frmStockView|DealerAmount
-Ctrl+I=frmDealerAmountCombinedView|Dealer Ledger
-Ctrl+U=frmCustomerView|Add Customer
-Ctrl+T=frmCustomerToCustomerView|Customer To Customer
-Ctrl+L=frmDieselLedger|Customer To Dealer
-Ctrl+J=frmDealertoDealerView|Dealer To Dealer
-Ctrl+K=frmStockDieselView|Stock Diesel
-Ctrl+E=frmExpense|Expense
-Ctrl+B=frmBankAccountView|Bank Account
-Ctrl+H=frmDashBoard|Dashboard
-Ctrl+O=frmClosingformEntry|Closing Entry
-Ctrl+W=frmClosing2|Closing 2
-Ctrl+Q=ReportAndBackup|Reports
-Ctrl+G=frmGmailDriveBackup|Gmail Drive Backup
+Alt+A=frmCustomerView|Add Customer
+Alt+D=frmDiselView|Daily Diesel Sales
+Alt+U=frmDealerNameView|Add Dealer
+Alt+M=frmStockView|DealerAmount
+Alt+F=frmDealerAmountCombinedView|Dealer Ledger
+Alt+K=frmStockDieselView|Stock Diesel
+Alt+E=frmExpense|Expense
+Alt+B=frmBankAccountView|Bank Account
+Alt+H=frmDashBoard|Dashboard
+Alt+O=frmClosingformEntry|Closing Entry
+Alt+W=frmClosing2|Closing 2
+Alt+Q=ReportAndBackup|Reports
+Alt+G=frmGmailDriveBackup|Gmail Drive Backup
+Alt+X=frmBulMalView|Bul Mal
 ";
                 File.WriteAllText(path, content);
             }
@@ -319,6 +317,15 @@ Ctrl+G=frmGmailDriveBackup|Gmail Drive Backup
             {
                 // ignore
             }
+        }
+
+        private static Keys PreferAltOverCtrl(Keys keyData)
+        {
+            Keys mods = keyData & Keys.Modifiers;
+            Keys key = keyData & Keys.KeyCode;
+            if ((mods & Keys.Control) != 0 && (mods & Keys.Alt) == 0)
+                return Keys.Alt | (mods & Keys.Shift) | key;
+            return keyData;
         }
 
         private static bool TryParseShortcut(string text, out Keys keyData)

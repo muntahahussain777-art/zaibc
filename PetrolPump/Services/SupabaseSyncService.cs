@@ -62,6 +62,8 @@ namespace ZaibPetroleumService.Services
 
         public static void StartSilent()
         {
+            if (!LocalAppStorage.IsSupabaseSyncEnabled)
+                return;
             try
             {
                 EnsureLocalSyncReady();
@@ -82,8 +84,7 @@ namespace ZaibPetroleumService.Services
 
         private static string StatePath()
         {
-            string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DiselPetrolPump");
-            Directory.CreateDirectory(folder);
+            string folder = LocalAppStorage.GetLocalDataDirectory();
             return Path.Combine(folder, "zaib_sync_state.json");
         }
 
@@ -286,6 +287,7 @@ namespace ZaibPetroleumService.Services
                 BackfillSyncIds(con, "StockDiesel", "SID");
                 BackfillSyncIds(con, "BankTransactions", "Id");
                 BackfillSyncIds(con, "Expensetable", "sid");
+                CollapseHyphenSyncClones(con);
 
                 // Mark dirty on business-column changes only (avoids sync loop)
                 EnsureTrigger(con, "trg_sync_AddCustomer_ai", "AddCustomer", "INSERT", "Name,Mobile,Date");
@@ -503,9 +505,7 @@ END;";
         {
             try
             {
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "DiselPetrolPump", "migrations");
+                string dir = Path.Combine(LocalAppStorage.GetLocalDataDirectory(), "migrations");
                 Directory.CreateDirectory(dir);
                 string stamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
                 string dest = Path.Combine(dir, "pre_tombstone_rev_" + stamp + ".db");
@@ -534,6 +534,8 @@ END;";
 
         private static async Task SyncNowSafe()
         {
+            if (!LocalAppStorage.IsSupabaseSyncEnabled)
+                return;
             if (Interlocked.Exchange(ref _running, 1) == 1)
             {
                 Interlocked.Exchange(ref _queued, 1);
@@ -714,6 +716,7 @@ END;";
             SQLiteConnection con, SQLiteTransaction tx,
             string sourceSyncId, object dealerId, double ddDelta, double dDelta)
         {
+            sourceSyncId = NormalizeSyncId(sourceSyncId);
             if (string.IsNullOrWhiteSpace(sourceSyncId)) return;
             string dealerSync = DealerSyncId(con, dealerId);
             int? did = null;
@@ -737,6 +740,7 @@ END;";
         /// <summary>After local delete reversed DD/D, drop marker so pull does not re-apply.</summary>
         public static void DeleteBalanceMarkerOnly(SQLiteConnection con, SQLiteTransaction tx, string sourceSyncId)
         {
+            sourceSyncId = NormalizeSyncId(sourceSyncId);
             if (string.IsNullOrWhiteSpace(sourceSyncId)) return;
             using (var cmd = new SQLiteCommand("DELETE FROM SyncBalanceApplied WHERE SourceSyncId=@s", con, tx))
             {
@@ -1275,10 +1279,10 @@ END;";
             try
             {
                 using (var cmd = new SQLiteCommand(
-                    $"UPDATE {localTable} SET ServerRev=@r WHERE SyncId=@s AND IFNULL(SyncDirty,0)=0", con))
+                    $"UPDATE {localTable} SET ServerRev=@r WHERE {WhereSyncIdEq()} AND IFNULL(SyncDirty,0)=0", con))
                 {
                     cmd.Parameters.AddWithValue("@r", rev.Value);
-                    cmd.Parameters.AddWithValue("@s", syncId);
+                    BindNormSync(cmd, syncId);
                     cmd.ExecuteNonQuery();
                 }
             }
@@ -1344,9 +1348,9 @@ END;";
             }
             if (gate == RemoteApplyGate.SkipDone) return true;
             if (deleted) { ApplyRemoteDelete(con, "AddDealer", syncId); return true; }
-            using (var chk = new SQLiteCommand("SELECT Did FROM AddDealer WHERE SyncId=@s", con))
+            using (var chk = new SQLiteCommand("SELECT Did FROM AddDealer WHERE " + WhereSyncIdEq() + " ORDER BY Did ASC LIMIT 1", con))
             {
-                chk.Parameters.AddWithValue("@s", syncId);
+                BindNormSync(chk, syncId);
                 var exists = chk.ExecuteScalar();
                 if (exists == null)
                 {
@@ -1361,12 +1365,12 @@ END;";
                 }
                 else
                 {
-                    using (var u = new SQLiteCommand("UPDATE AddDealer SET DealerName=@n, Date=@dt, UpdatedAt=@u, SyncDirty=0 WHERE SyncId=@s", con))
+                    using (var u = new SQLiteCommand("UPDATE AddDealer SET DealerName=@n, Date=@dt, UpdatedAt=@u, SyncDirty=0 WHERE " + WhereSyncIdEq(), con))
                     {
                         u.Parameters.AddWithValue("@n", r.Value<string>("dealer_name") ?? "");
                         u.Parameters.AddWithValue("@dt", r.Value<string>("date_text") ?? "");
                         u.Parameters.AddWithValue("@u", updated);
-                        u.Parameters.AddWithValue("@s", syncId);
+                        BindNormSync(u, syncId);
                         RequireApplyRows(u.ExecuteNonQuery(), "update:AddDealer", syncId);
                     }
                 }
@@ -1451,13 +1455,13 @@ END;";
                 StageRemote(con, "zaib_dealer_purchases", r);
                 return false;
             }
-            using (var chk = new SQLiteCommand("SELECT Sid FROM AddStock WHERE SyncId=@s", con))
+            using (var chk = new SQLiteCommand("SELECT Sid FROM AddStock WHERE " + WhereSyncIdEq() + " LIMIT 1", con))
             {
-                chk.Parameters.AddWithValue("@s", syncId);
+                BindNormSync(chk, syncId);
                 var exists = chk.ExecuteScalar();
                 string sql = exists == null
                     ? "INSERT INTO AddStock(Vehicle,Rate,SellDisel,Stock,Date,AddDisel,DealerId,Note,SyncId,UpdatedAt,SyncDirty) VALUES(@Vehicle,@Rate,0,0,@Date,@AddDisel,@DealerId,@Note,@s,@u,0)"
-                    : "UPDATE AddStock SET Vehicle=@Vehicle,Rate=@Rate,Date=@Date,AddDisel=@AddDisel,DealerId=@DealerId,Note=@Note,UpdatedAt=@u,SyncDirty=0 WHERE SyncId=@s";
+                    : "UPDATE AddStock SET Vehicle=@Vehicle,Rate=@Rate,Date=@Date,AddDisel=@AddDisel,DealerId=@DealerId,Note=@Note,UpdatedAt=@u,SyncDirty=0 WHERE " + WhereSyncIdEq();
                 using (var cmd = new SQLiteCommand(sql, con))
                 {
                     cmd.Parameters.AddWithValue("@Vehicle", r.Value<string>("vehicle") ?? "");
@@ -1468,6 +1472,8 @@ END;";
                     cmd.Parameters.AddWithValue("@Note", r.Value<string>("note") ?? "");
                     cmd.Parameters.AddWithValue("@s", syncId);
                     cmd.Parameters.AddWithValue("@u", updated);
+                    if (exists != null)
+                        BindNormSync(cmd, syncId);
                     RequireApplyRows(cmd.ExecuteNonQuery(), exists == null ? "insert:AddStock" : "update:AddStock", syncId);
                 }
             }
@@ -2017,6 +2023,22 @@ END;";
             var dt = QueryDirty(con, "SELECT * FROM StockDiesel WHERE IFNULL(SyncDirty,1)=1");
             foreach (DataRow r in dt.Rows)
             {
+                // Roznamcha Add2: SDid = StockPartyName.Pid (AddDealer nahi).
+                // Inhe cloud dealer-parent se mat jodo — warna galat dealer pe push / local wipe.
+                bool isStockParty = false;
+                try
+                {
+                    using (var chk = new SQLiteCommand(
+                        "SELECT 1 FROM StockPartyName WHERE Pid=@id LIMIT 1", con))
+                    {
+                        chk.Parameters.AddWithValue("@id", r["SDid"] ?? DBNull.Value);
+                        isStockParty = chk.ExecuteScalar() != null;
+                    }
+                }
+                catch { isStockParty = false; }
+                if (isStockParty)
+                    continue;
+
                 if (!ParentReady(con, "AddDealer", "Did", r["SDid"])) continue;
                 string syncId = string.IsNullOrWhiteSpace(Convert.ToString(r["SyncId"])) ? Guid.NewGuid().ToString() : Convert.ToString(r["SyncId"]);
                 string updatedAt = RowUpdatedAt(r);
@@ -2267,12 +2289,143 @@ END;";
             return d;
         }
 
+        private static string NormalizeSyncId(string syncId)
+        {
+            if (string.IsNullOrWhiteSpace(syncId)) return syncId;
+            return syncId.Trim().Replace("-", "").ToLowerInvariant();
+        }
+
+        private static string WhereSyncIdEq()
+        {
+            return "lower(replace(trim(IFNULL(SyncId,'')), '-', '')) = @ns";
+        }
+
+        private static void BindNormSync(SQLiteCommand cmd, string syncId)
+        {
+            cmd.Parameters.AddWithValue("@ns", NormalizeSyncId(syncId) ?? "");
+        }
+
+        /// <summary>
+        /// Cloud UUID (hyphens) vs local hex SyncId used to INSERT cloned dealer/payout rows.
+        /// Collapse clones locally; pull protocol unchanged.
+        /// </summary>
+        private static void CollapseHyphenSyncClones(SQLiteConnection con)
+        {
+            BeginRemoteApply(con);
+            try
+            {
+                CollapseDupSyncRows(con, "DieselLedgerCredit", "LedgerID");
+                CollapseDupSyncRows(con, "DieselLedgerDebit", "LedgerID");
+                CollapseDupSyncRows(con, "AddStock", "Sid");
+                CollapseDupDealers(con);
+            }
+            catch { }
+            finally
+            {
+                EndRemoteApply(con);
+            }
+        }
+
+        private static void CollapseDupSyncRows(SQLiteConnection con, string table, string pk)
+        {
+            var groups = new Dictionary<string, List<long>>(StringComparer.Ordinal);
+            using (var cmd = new SQLiteCommand(
+                $"SELECT {pk}, SyncId FROM {table} WHERE SyncId IS NOT NULL AND trim(SyncId)<>''", con))
+            using (var rd = cmd.ExecuteReader())
+            {
+                while (rd.Read())
+                {
+                    long id = Convert.ToInt64(rd[0]);
+                    string n = NormalizeSyncId(Convert.ToString(rd[1]));
+                    if (string.IsNullOrEmpty(n)) continue;
+                    List<long> list;
+                    if (!groups.TryGetValue(n, out list))
+                    {
+                        list = new List<long>();
+                        groups[n] = list;
+                    }
+                    list.Add(id);
+                }
+            }
+            foreach (var kv in groups)
+            {
+                if (kv.Value.Count < 2) continue;
+                kv.Value.Sort();
+                for (int i = 1; i < kv.Value.Count; i++)
+                {
+                    using (var d = new SQLiteCommand($"DELETE FROM {table} WHERE {pk}=@id", con))
+                    {
+                        d.Parameters.AddWithValue("@id", kv.Value[i]);
+                        d.ExecuteNonQuery();
+                    }
+                }
+            }
+        }
+
+        private static void CollapseDupDealers(SQLiteConnection con)
+        {
+            var groups = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+            using (var cmd = new SQLiteCommand(
+                "SELECT Did, SyncId FROM AddDealer WHERE SyncId IS NOT NULL AND trim(SyncId)<>''", con))
+            using (var rd = cmd.ExecuteReader())
+            {
+                while (rd.Read())
+                {
+                    int id = Convert.ToInt32(rd[0]);
+                    string n = NormalizeSyncId(Convert.ToString(rd[1]));
+                    if (string.IsNullOrEmpty(n)) continue;
+                    List<int> list;
+                    if (!groups.TryGetValue(n, out list))
+                    {
+                        list = new List<int>();
+                        groups[n] = list;
+                    }
+                    list.Add(id);
+                }
+            }
+            foreach (var kv in groups)
+            {
+                if (kv.Value.Count < 2) continue;
+                kv.Value.Sort();
+                int keep = kv.Value[0];
+                for (int i = 1; i < kv.Value.Count; i++)
+                {
+                    int extra = kv.Value[i];
+                    ExecRetarget(con, "UPDATE DieselLedgerCredit SET Did=@k WHERE Did=@e", keep, extra);
+                    ExecRetarget(con, "UPDATE DieselLedgerDebit SET Did=@k WHERE Did=@e", keep, extra);
+                    ExecRetarget(con, "UPDATE AddStock SET DealerId=@k WHERE DealerId=@e", keep, extra);
+                    ExecRetarget(con, "UPDATE StockDiesel SET SDid=@k WHERE SDid=@e", keep, extra);
+                    ExecRetarget(con, "UPDATE BankTransactions SET DealerId=@k WHERE DealerId=@e", keep, extra);
+                    using (var d = new SQLiteCommand("DELETE FROM AddDealer WHERE Did=@e", con))
+                    {
+                        d.Parameters.AddWithValue("@e", extra);
+                        d.ExecuteNonQuery();
+                    }
+                }
+            }
+        }
+
+        private static void ExecRetarget(SQLiteConnection con, string sql, int keep, int extra)
+        {
+            try
+            {
+                using (var cmd = new SQLiteCommand(sql, con))
+                {
+                    cmd.Parameters.AddWithValue("@k", keep);
+                    cmd.Parameters.AddWithValue("@e", extra);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            catch { }
+        }
+
         private static object LocalIdBySync(SQLiteConnection con, string table, string pk, string syncId)
         {
             if (string.IsNullOrWhiteSpace(syncId)) return DBNull.Value;
-            using (var cmd = new SQLiteCommand($"SELECT {pk} FROM {table} WHERE SyncId=@s LIMIT 1", con))
+            using (var cmd = new SQLiteCommand(
+                $"SELECT {pk} FROM {table} WHERE {WhereSyncIdEq()} ORDER BY {pk} ASC LIMIT 1", con))
             {
-                cmd.Parameters.AddWithValue("@s", syncId);
+                BindNormSync(cmd, syncId);
                 var v = cmd.ExecuteScalar();
                 return v ?? (object)DBNull.Value;
             }
@@ -2280,18 +2433,19 @@ END;";
 
         private static bool HasTombstone(SQLiteConnection con, string syncId)
         {
-            using (var cmd = new SQLiteCommand("SELECT 1 FROM SyncTombstone WHERE SyncId=@s LIMIT 1", con))
+            using (var cmd = new SQLiteCommand("SELECT 1 FROM SyncTombstone WHERE " + WhereSyncIdEq() + " LIMIT 1", con))
             {
-                cmd.Parameters.AddWithValue("@s", syncId);
+                BindNormSync(cmd, syncId);
                 return cmd.ExecuteScalar() != null;
             }
         }
 
         private static bool IsSyncDirty(SQLiteConnection con, string table, string syncId)
         {
-            using (var cmd = new SQLiteCommand($"SELECT SyncDirty FROM {table} WHERE SyncId=@s LIMIT 1", con))
+            using (var cmd = new SQLiteCommand(
+                $"SELECT SyncDirty FROM {table} WHERE {WhereSyncIdEq()} ORDER BY rowid ASC LIMIT 1", con))
             {
-                cmd.Parameters.AddWithValue("@s", syncId);
+                BindNormSync(cmd, syncId);
                 var v = cmd.ExecuteScalar();
                 if (v == null || v == DBNull.Value) return false;
                 return Convert.ToInt32(v) == 1;
@@ -2305,9 +2459,9 @@ END;";
                 // Keep local tombstone until push ack; never resurrect from stale live row.
                 return remoteDeleted;
             }
-            using (var cmd = new SQLiteCommand($"SELECT UpdatedAt, SyncDirty, ServerRev FROM {table} WHERE SyncId=@s LIMIT 1", con))
+            using (var cmd = new SQLiteCommand($"SELECT UpdatedAt, SyncDirty, ServerRev FROM {table} WHERE {WhereSyncIdEq()} LIMIT 1", con))
             {
-                cmd.Parameters.AddWithValue("@s", syncId);
+                BindNormSync(cmd, syncId);
                 using (var r = cmd.ExecuteReader())
                 {
                     if (!r.Read()) return true;
@@ -2362,21 +2516,21 @@ END;";
             if (HasTombstone(con, syncId) && !_forceAuthoritativeApply) return;
             if (!_forceAuthoritativeApply)
             {
-                using (var chk = new SQLiteCommand($"SELECT SyncDirty FROM {table} WHERE SyncId=@s LIMIT 1", con))
+                using (var chk = new SQLiteCommand($"SELECT SyncDirty FROM {table} WHERE {WhereSyncIdEq()} LIMIT 1", con))
                 {
-                    chk.Parameters.AddWithValue("@s", syncId);
+                    BindNormSync(chk, syncId);
                     var v = chk.ExecuteScalar();
                     if (v != null && v != DBNull.Value && Convert.ToInt32(v) == 1) return;
                 }
             }
-            using (var d = new SQLiteCommand($"DELETE FROM {table} WHERE SyncId=@s", con))
+            using (var d = new SQLiteCommand($"DELETE FROM {table} WHERE {WhereSyncIdEq()}", con))
             {
-                d.Parameters.AddWithValue("@s", syncId);
+                BindNormSync(d, syncId);
                 d.ExecuteNonQuery();
             }
-            using (var t = new SQLiteCommand("DELETE FROM SyncTombstone WHERE SyncId=@s", con))
+            using (var t = new SQLiteCommand("DELETE FROM SyncTombstone WHERE " + WhereSyncIdEq(), con))
             {
-                t.Parameters.AddWithValue("@s", syncId);
+                BindNormSync(t, syncId);
                 t.ExecuteNonQuery();
             }
         }
@@ -2480,9 +2634,9 @@ END;";
                     AdvanceCheckpoint(updated, syncId, ref appliedMax);
                     continue;
                 }
-                using (var chk = new SQLiteCommand("SELECT Did FROM AddDealer WHERE SyncId=@s", con))
+                using (var chk = new SQLiteCommand("SELECT Did FROM AddDealer WHERE " + WhereSyncIdEq() + " ORDER BY Did ASC LIMIT 1", con))
                 {
-                    chk.Parameters.AddWithValue("@s", syncId);
+                    BindNormSync(chk, syncId);
                     var exists = chk.ExecuteScalar();
                     if (exists == null)
                     {
@@ -2497,12 +2651,12 @@ END;";
                     }
                     else
                     {
-                        using (var u = new SQLiteCommand("UPDATE AddDealer SET DealerName=@n, Date=@dt, UpdatedAt=@u, SyncDirty=0 WHERE SyncId=@s", con))
+                        using (var u = new SQLiteCommand("UPDATE AddDealer SET DealerName=@n, Date=@dt, UpdatedAt=@u, SyncDirty=0 WHERE " + WhereSyncIdEq(), con))
                         {
                             u.Parameters.AddWithValue("@n", r.Value<string>("dealer_name") ?? "");
                             u.Parameters.AddWithValue("@dt", r.Value<string>("date_text") ?? "");
                             u.Parameters.AddWithValue("@u", updated);
-                            u.Parameters.AddWithValue("@s", syncId);
+                            BindNormSync(u, syncId);
                             u.ExecuteNonQuery();
                         }
                     }
@@ -2624,13 +2778,13 @@ END;";
                     StageRemote(con, "zaib_dealer_purchases", r);
                     continue;
                 }
-                using (var chk = new SQLiteCommand("SELECT Sid FROM AddStock WHERE SyncId=@s", con))
+                using (var chk = new SQLiteCommand("SELECT Sid FROM AddStock WHERE " + WhereSyncIdEq() + " LIMIT 1", con))
                 {
-                    chk.Parameters.AddWithValue("@s", syncId);
+                    BindNormSync(chk, syncId);
                     var exists = chk.ExecuteScalar();
                     string sql = exists == null
                         ? "INSERT INTO AddStock(Vehicle,Rate,SellDisel,Stock,Date,AddDisel,DealerId,Note,SyncId,UpdatedAt,SyncDirty) VALUES(@Vehicle,@Rate,0,0,@Date,@AddDisel,@DealerId,@Note,@s,@u,0)"
-                        : "UPDATE AddStock SET Vehicle=@Vehicle,Rate=@Rate,Date=@Date,AddDisel=@AddDisel,DealerId=@DealerId,Note=@Note,UpdatedAt=@u,SyncDirty=0 WHERE SyncId=@s";
+                        : "UPDATE AddStock SET Vehicle=@Vehicle,Rate=@Rate,Date=@Date,AddDisel=@AddDisel,DealerId=@DealerId,Note=@Note,UpdatedAt=@u,SyncDirty=0 WHERE " + WhereSyncIdEq();
                     using (var cmd = new SQLiteCommand(sql, con))
                     {
                         cmd.Parameters.AddWithValue("@Vehicle", r.Value<string>("vehicle") ?? "");
@@ -2641,6 +2795,8 @@ END;";
                         cmd.Parameters.AddWithValue("@Note", r.Value<string>("note") ?? "");
                         cmd.Parameters.AddWithValue("@s", syncId);
                         cmd.Parameters.AddWithValue("@u", updated);
+                        if (exists != null)
+                            BindNormSync(cmd, syncId);
                         cmd.ExecuteNonQuery();
                     }
                 }
@@ -2890,13 +3046,13 @@ END;";
                                 applied = false;
                             else
                             {
-                                using (var chk = new SQLiteCommand("SELECT Sid FROM AddStock WHERE SyncId=@s", con))
+                                using (var chk = new SQLiteCommand("SELECT Sid FROM AddStock WHERE " + WhereSyncIdEq() + " LIMIT 1", con))
                                 {
-                                    chk.Parameters.AddWithValue("@s", syncId);
+                                    BindNormSync(chk, syncId);
                                     var exists = chk.ExecuteScalar();
                                     string sql = exists == null
                                         ? "INSERT INTO AddStock(Vehicle,Rate,SellDisel,Stock,Date,AddDisel,DealerId,Note,SyncId,UpdatedAt,SyncDirty) VALUES(@Vehicle,@Rate,0,0,@Date,@AddDisel,@DealerId,@Note,@s,@u,0)"
-                                        : "UPDATE AddStock SET Vehicle=@Vehicle,Rate=@Rate,Date=@Date,AddDisel=@AddDisel,DealerId=@DealerId,Note=@Note,UpdatedAt=@u,SyncDirty=0 WHERE SyncId=@s";
+                                        : "UPDATE AddStock SET Vehicle=@Vehicle,Rate=@Rate,Date=@Date,AddDisel=@AddDisel,DealerId=@DealerId,Note=@Note,UpdatedAt=@u,SyncDirty=0 WHERE " + WhereSyncIdEq();
                                     using (var cmd = new SQLiteCommand(sql, con))
                                     {
                                         cmd.Parameters.AddWithValue("@Vehicle", payload.Value<string>("vehicle") ?? "");
@@ -2907,6 +3063,8 @@ END;";
                                         cmd.Parameters.AddWithValue("@Note", payload.Value<string>("note") ?? "");
                                         cmd.Parameters.AddWithValue("@s", syncId);
                                         cmd.Parameters.AddWithValue("@u", updated);
+                                        if (exists != null)
+                                            BindNormSync(cmd, syncId);
                                         cmd.ExecuteNonQuery();
                                     }
                                 }
@@ -3181,6 +3339,7 @@ END;";
 
         private static void ReconcileDealerBalance(SQLiteConnection con, string sourceSyncId, object dealerId, double ddDelta, double dDelta, bool markDealerDirty = false)
         {
+            sourceSyncId = NormalizeSyncId(sourceSyncId);
             if (string.IsNullOrWhiteSpace(sourceSyncId)) return;
             int? did = null;
             if (dealerId != null && dealerId != DBNull.Value)
@@ -3321,18 +3480,20 @@ END;";
                 if (r is JObject jo) StageRemote(con, cloudTable, jo);
                 return false;
             }
-            using (var chk = new SQLiteCommand($"SELECT {pk} FROM {localTable} WHERE SyncId=@s", con))
+            using (var chk = new SQLiteCommand($"SELECT {pk} FROM {localTable} WHERE {WhereSyncIdEq()} LIMIT 1", con))
             {
-                chk.Parameters.AddWithValue("@s", syncId);
+                BindNormSync(chk, syncId);
                 var exists = chk.ExecuteScalar();
                 string sql = exists == null
                     ? $"INSERT INTO {localTable}({insertCols},SyncId,UpdatedAt,SyncDirty) VALUES(@Did,@Date,@AmounGiven,@Note,@s,@u,0)"
-                    : $"UPDATE {localTable} SET Did=@Did,Date=@Date,AmounGiven=@AmounGiven,Note=@Note,UpdatedAt=@u,SyncDirty=0 WHERE SyncId=@s";
+                    : $"UPDATE {localTable} SET Did=@Did,Date=@Date,AmounGiven=@AmounGiven,Note=@Note,UpdatedAt=@u,SyncDirty=0 WHERE {WhereSyncIdEq()}";
                 using (var cmd = new SQLiteCommand(sql, con))
                 {
                     bind(cmd, r, parentId);
                     cmd.Parameters.AddWithValue("@s", syncId);
                     cmd.Parameters.AddWithValue("@u", updated);
+                    if (exists != null)
+                        BindNormSync(cmd, syncId);
                     RequireApplyRows(cmd.ExecuteNonQuery(), exists == null ? "insert:" + localTable : "update:" + localTable, syncId);
                 }
             }

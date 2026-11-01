@@ -27,9 +27,19 @@ namespace ZaibPetroleumService.View
         {
             EnableGridDoubleBuffering();
             EnsureQueryIndex();
+            try
+            {
+                using (var con = new SQLiteConnection(projectconnection.conReturn()))
+                {
+                    con.Open();
+                    Services.DatabaseSchemaManager.EnsureProfessionalSchema(con);
+                }
+            }
+            catch { }
 
-            comboBox1.Items.Add("TotalAmount/Divide");
-            comboBox1.SelectedIndex = 0;
+            // Average band — date filters lazmi (VIP)
+            try { if (comboBox1 != null) comboBox1.Visible = false; } catch { }
+            try { if (btnAverage != null) btnAverage.Visible = false; } catch { }
             dtpStart.Value = DateTime.Now;
             dtpEnd.Value = DateTime.Now;
 
@@ -44,6 +54,7 @@ namespace ZaibPetroleumService.View
             dtpEnd.ValueChanged += DatePickers_ValueChanged;
             guna2DataGridView1.CellFormatting += guna2DataGridView1_CellFormatting;
 
+            try { EnsureDealerVipFilters(); } catch { }
             LoadData1();
         }
 
@@ -94,7 +105,16 @@ namespace ZaibPetroleumService.View
                 endDate = tmp;
             }
 
-            Task.Run(() => FetchStockData(searchText, startDate, endDate))
+            string locF = "";
+            string itemF = "";
+            string modelF = "";
+            string inOutF = "";
+            try { locF = GetDealerVipLocFilter(); } catch { }
+            try { itemF = GetDealerVipItemFilter(); } catch { }
+            try { modelF = GetDealerVipModelFilter(); } catch { }
+            try { inOutF = GetDealerVipInOutFilter(); } catch { }
+
+            Task.Run(() => FetchStockData(searchText, startDate, endDate, locF, itemF, modelF, inOutF))
                 .ContinueWith(t =>
                 {
                     if (token != _loadToken || IsDisposed) return;
@@ -108,20 +128,77 @@ namespace ZaibPetroleumService.View
                 }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
-        private static DataTable FetchStockData(string searchText, DateTime startDate, DateTime endDate)
+        private static DataTable FetchStockData(
+            string searchText, DateTime startDate, DateTime endDate,
+            string locFilter = "", string itemFilter = "", string modelFilter = "", string inOutFilter = "")
         {
             searchText = (searchText ?? string.Empty).Trim();
-            const string selectCore = @"
-SELECT AddStock.Sid,
-       AddStock.Date,
-       AddDealer.DealerName,
-       AddStock.Vehicle,
-       IFNULL(AddStock.Rate, 0) AS Rate,
+            locFilter = (locFilter ?? "").Trim();
+            itemFilter = (itemFilter ?? "").Trim();
+            modelFilter = (modelFilter ?? "").Trim();
+            inOutFilter = (inOutFilter ?? "").Trim();
+
+            // Amount = Litter×Rate when both > 0, else Amount column; Credit = AddStock.Credit
+            // UNION Dealer Payout (DieselLedger) credits so same credit DealerAmount mein dikhe
+            const string amountExpr = @"
+CASE
+  WHEN IFNULL(AddStock.AddDisel, 0) <> 0 AND IFNULL(AddStock.Rate, 0) <> 0
+    THEN CAST(IFNULL(AddStock.AddDisel, 0) AS REAL) * CAST(IFNULL(AddStock.Rate, 0) AS REAL)
+  ELSE IFNULL(AddStock.Amount, 0)
+END";
+
+            const string stockSelect = @"
+SELECT AddStock.Sid AS Sid,
+       AddStock.DealerId AS DealerId,
+       AddStock.Date AS Date,
+       IFNULL(AddDealer.DealerName,'') AS DealerName,
+       IFNULL(AddStock.Vehicle,'') AS Vehicle,
+       IFNULL(NULLIF(TRIM(IFNULL(AddStock.SaleInOut,'')),''),'In') AS SaleInOut,
+       IFNULL(AddStock.SaleLocation,'') AS SaleLocation,
+       IFNULL(AddStock.SaleItem,'') AS SaleItem,
+       IFNULL(AddStock.SaleVehicleModel,'') AS SaleVehicleModel,
        IFNULL(AddStock.AddDisel, 0) AS AddDisel,
-       CAST(IFNULL(AddStock.Rate, 0) * IFNULL(AddStock.AddDisel, 0) AS DECIMAL(18, 3)) AS Amount,
-       AddStock.Note
+       IFNULL(AddStock.Rate, 0) AS Rate,
+       CAST(" + amountExpr + @" AS DECIMAL(18,3)) AS Amount,
+       IFNULL(AddStock.Credit, 0) AS Credit,
+       IFNULL(AddStock.Note,'') AS Note,
+       CAST(0 AS REAL) AS RunningBalance,
+       'stock' AS Src
 FROM AddStock
 LEFT JOIN AddDealer ON AddStock.DealerId = AddDealer.Did";
+
+            const string payoutSelect = @"
+SELECT DieselLedger.LedgerID AS Sid,
+       DieselLedger.Did AS DealerId,
+       DieselLedger.Date AS Date,
+       IFNULL(AddDealer.DealerName,'') AS DealerName,
+       '' AS Vehicle,
+       'In' AS SaleInOut,
+       '' AS SaleLocation,
+       '' AS SaleItem,
+       '' AS SaleVehicleModel,
+       0 AS AddDisel,
+       0 AS Rate,
+       0 AS Amount,
+       IFNULL(DieselLedger.AmounGiven, 0) AS Credit,
+       IFNULL(DieselLedger.Note,'') AS Note,
+       CAST(NULL AS REAL) AS RunningBalance,
+       'payout' AS Src
+FROM DieselLedger
+LEFT JOIN AddDealer ON DieselLedger.Did = AddDealer.Did";
+
+            // VIP filters — stock rows; payout (empty VIP) only when filters All
+            const string stockVipFilter = @"
+  AND (@LocFilter = '' OR TRIM(IFNULL(AddStock.SaleLocation,'')) = @LocFilter)
+  AND (@ItemFilter = '' OR TRIM(IFNULL(AddStock.SaleItem,'')) = @ItemFilter)
+  AND (@ModelFilter = '' OR TRIM(IFNULL(AddStock.SaleVehicleModel,'')) = @ModelFilter)
+  AND (@InOutFilter = '' OR IFNULL(NULLIF(TRIM(IFNULL(AddStock.SaleInOut,'')),''),'In') = @InOutFilter)";
+
+            const string payoutVipFilter = @"
+  AND (@LocFilter = '' OR '' = @LocFilter)
+  AND (@ItemFilter = '' OR '' = @ItemFilter)
+  AND (@ModelFilter = '' OR '' = @ModelFilter)
+  AND (@InOutFilter = '' OR 'In' = @InOutFilter)";
 
             var dt = new DataTable();
             using (var con = new SQLiteConnection(projectconnection.conReturn()))
@@ -130,15 +207,30 @@ LEFT JOIN AddDealer ON AddStock.DealerId = AddDealer.Did";
                 string qry;
                 var cmd = new SQLiteCommand { Connection = con };
 
+                void BindVipFilters()
+                {
+                    cmd.Parameters.AddWithValue("@LocFilter", locFilter);
+                    cmd.Parameters.AddWithValue("@ItemFilter", itemFilter);
+                    cmd.Parameters.AddWithValue("@ModelFilter", modelFilter);
+                    cmd.Parameters.AddWithValue("@InOutFilter", inOutFilter);
+                }
+
                 if (string.IsNullOrEmpty(searchText))
                 {
-                    qry = selectCore + @"
+                    qry = stockSelect + @"
 WHERE date(AddStock.Date) >= date(@StartDate)
   AND date(AddStock.Date) <= date(@EndDate)
-ORDER BY AddStock.Date ASC";
+" + stockVipFilter + @"
+UNION ALL
+" + payoutSelect + @"
+WHERE date(DieselLedger.Date) >= date(@StartDate)
+  AND date(DieselLedger.Date) <= date(@EndDate)
+" + payoutVipFilter + @"
+ORDER BY DealerName COLLATE NOCASE, Date ASC, Sid ASC";
                     cmd.CommandText = qry;
                     cmd.Parameters.AddWithValue("@StartDate", startDate.ToString("yyyy-MM-dd"));
                     cmd.Parameters.AddWithValue("@EndDate", endDate.ToString("yyyy-MM-dd"));
+                    BindVipFilters();
                 }
                 else
                 {
@@ -147,22 +239,38 @@ ORDER BY AddStock.Date ASC";
 
                     if (exactDealerId.HasValue)
                     {
-                        qry = selectCore + @"
+                        qry = stockSelect + @"
 WHERE AddStock.DealerId = @DealerId
-ORDER BY AddStock.Date ASC";
+" + stockVipFilter + @"
+UNION ALL
+" + payoutSelect + @"
+WHERE DieselLedger.Did = @DealerId
+" + payoutVipFilter + @"
+ORDER BY Date ASC, Sid ASC";
                         cmd.CommandText = qry;
                         cmd.Parameters.AddWithValue("@DealerId", exactDealerId.Value);
+                        BindVipFilters();
                     }
                     else
                     {
-                        qry = selectCore + @"
+                        qry = stockSelect + @"
 WHERE (
         IFNULL(AddStock.Vehicle, '') LIKE @SearchLike
         OR IFNULL(AddStock.Note, '') LIKE @SearchLike
+        OR IFNULL(AddDealer.DealerName, '') LIKE @SearchLike
       )
-ORDER BY AddStock.Date ASC";
+" + stockVipFilter + @"
+UNION ALL
+" + payoutSelect + @"
+WHERE (
+        IFNULL(DieselLedger.Note, '') LIKE @SearchLike
+        OR IFNULL(AddDealer.DealerName, '') LIKE @SearchLike
+      )
+" + payoutVipFilter + @"
+ORDER BY DealerName COLLATE NOCASE, Date ASC, Sid ASC";
                         cmd.CommandText = qry;
                         cmd.Parameters.AddWithValue("@SearchLike", searchLike);
+                        BindVipFilters();
                     }
                 }
 
@@ -170,7 +278,36 @@ ORDER BY AddStock.Date ASC";
                 using (var da = new SQLiteDataAdapter(cmd))
                     da.Fill(dt);
             }
+
+            ApplyDealerRunningBalance(dt);
             return dt;
+        }
+
+        /// <summary>
+        /// Running Balance har row — Amount + / Credit − (stock + payout) dealer-wise chronological.
+        /// </summary>
+        private static void ApplyDealerRunningBalance(DataTable dt)
+        {
+            if (dt == null || dt.Rows.Count == 0) return;
+            if (!dt.Columns.Contains("RunningBalance"))
+                dt.Columns.Add("RunningBalance", typeof(decimal));
+
+            // Sort already by dealer/date; recompute sequentially
+            int prevDid = int.MinValue;
+            decimal run = 0m;
+            foreach (DataRow row in dt.Rows)
+            {
+                int did = row["DealerId"] != DBNull.Value ? Convert.ToInt32(row["DealerId"]) : 0;
+                if (did != prevDid)
+                {
+                    run = 0m;
+                    prevDid = did;
+                }
+                decimal amt = row["Amount"] != DBNull.Value ? Convert.ToDecimal(row["Amount"]) : 0m;
+                decimal cred = row["Credit"] != DBNull.Value ? Convert.ToDecimal(row["Credit"]) : 0m;
+                run += amt - cred;
+                row["RunningBalance"] = run;
+            }
         }
 
         private static int? TryGetExactDealerId(SQLiteConnection con, string name)
@@ -203,6 +340,7 @@ ORDER BY AddStock.Date ASC";
             guna2DataGridView1.SuspendLayout();
             try
             {
+                guna2DataGridView1.AutoGenerateColumns = true;
                 if (dt != null && dt.Rows.Count > 0)
                 {
                     if (!dt.Columns.Contains("Sr"))
@@ -211,14 +349,8 @@ ORDER BY AddStock.Date ASC";
                         dt.Rows[i]["Sr"] = i + 1;
 
                     guna2DataGridView1.DataSource = dt;
-                    if (guna2DataGridView1.Columns.Contains("Sid"))
-                        guna2DataGridView1.Columns["Sid"].Visible = false;
-                    if (guna2DataGridView1.Columns.Contains("Sr"))
-                    {
-                        guna2DataGridView1.Columns["Sr"].HeaderText = "S/N";
-                        guna2DataGridView1.Columns["Sr"].DisplayIndex = 0;
-                        guna2DataGridView1.Columns["Sr"].Width = 50;
-                    }
+                    ApplyDealerAmountVipGrid();
+                    try { EnableQuickDealerAmountCreditEdit(); } catch { }
                 }
                 else
                 {
@@ -239,43 +371,125 @@ ORDER BY AddStock.Date ASC";
 
         private void CalculateTotals()
         {
-            decimal totalDisel = 0;
-            decimal totalAmount = 0;
+            decimal totalIn = 0m;
+            decimal totalOut = 0m;
+            decimal totalCredit = 0m;
 
             foreach (DataGridViewRow row in guna2DataGridView1.Rows)
             {
                 if (row.IsNewRow) continue;
 
-                if (row.Cells["AddDisel"].Value != null && row.Cells["AddDisel"].Value != DBNull.Value)
-                    totalDisel += Convert.ToDecimal(row.Cells["AddDisel"].Value);
-
+                decimal rowAmt = 0m;
                 if (guna2DataGridView1.Columns.Contains("Amount") &&
                     row.Cells["Amount"].Value != null && row.Cells["Amount"].Value != DBNull.Value)
                 {
-                    totalAmount += Convert.ToDecimal(row.Cells["Amount"].Value);
+                    rowAmt = Convert.ToDecimal(row.Cells["Amount"].Value);
                 }
-                else if (row.Cells["Rate"].Value != null && row.Cells["Rate"].Value != DBNull.Value &&
+                else if (guna2DataGridView1.Columns.Contains("Rate") &&
+                         guna2DataGridView1.Columns.Contains("AddDisel") &&
+                         row.Cells["Rate"].Value != null && row.Cells["Rate"].Value != DBNull.Value &&
                          row.Cells["AddDisel"].Value != null && row.Cells["AddDisel"].Value != DBNull.Value)
                 {
-                    totalAmount += Convert.ToDecimal(row.Cells["Rate"].Value) * Convert.ToDecimal(row.Cells["AddDisel"].Value);
+                    rowAmt = Convert.ToDecimal(row.Cells["Rate"].Value) * Convert.ToDecimal(row.Cells["AddDisel"].Value);
                 }
+
+                string io = "In";
+                try
+                {
+                    if (guna2DataGridView1.Columns.Contains("SaleInOut") &&
+                        row.Cells["SaleInOut"].Value != null &&
+                        row.Cells["SaleInOut"].Value != DBNull.Value)
+                        io = row.Cells["SaleInOut"].Value.ToString().Trim();
+                }
+                catch { }
+                if (string.IsNullOrEmpty(io)) io = "In";
+
+                if (string.Equals(io, "Out", StringComparison.OrdinalIgnoreCase))
+                    totalOut += rowAmt;
+                else
+                    totalIn += rowAmt;
+
+                if (guna2DataGridView1.Columns.Contains("Credit") &&
+                    row.Cells["Credit"].Value != null && row.Cells["Credit"].Value != DBNull.Value)
+                    totalCredit += Convert.ToDecimal(row.Cells["Credit"].Value);
             }
 
-            lblTotalDisel.Text = $"Total Disel: {totalDisel:F2} L";
-            lblTotalAmount.Text = $"Total Amount: {totalAmount:F2} Rs";
+            decimal net = totalIn - totalOut - totalCredit;
+            try
+            {
+                if (lblTotalAmount != null)
+                {
+                    lblTotalAmount.Text = $"In: {totalIn:N0}";
+                    lblTotalAmount.ForeColor = Color.LightGreen;
+                }
+                if (lblResult != null)
+                {
+                    lblResult.Text = $"Out −{totalOut:N0}  |  Credit −{totalCredit:N0}";
+                    lblResult.ForeColor = Color.Red;
+                    lblResult.Visible = true;
+                }
+                if (lblTotalDisel != null)
+                {
+                    lblTotalDisel.Text = $"Net: {net:N0}";
+                    lblTotalDisel.ForeColor = Color.FromArgb(212, 175, 55);
+                }
+            }
+            catch { }
         }
 
         private void guna2DataGridView1_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
         {
-            if (!guna2DataGridView1.Columns.Contains("Amount")) return;
-            if (guna2DataGridView1.Columns[e.ColumnIndex].Name != "Amount" || e.Value == null || e.Value == DBNull.Value)
-                return;
+            if (e.RowIndex < 0) return;
+            string col = guna2DataGridView1.Columns[e.ColumnIndex].Name;
 
-            if (decimal.TryParse(e.Value.ToString(), out decimal amount))
+            // In/Out — Daily Diesel jaisa: Out red, In green (balance math touch nahi)
+            if (col == "SaleInOut")
             {
-                e.Value = amount.ToString("N2");
+                string io = (e.Value ?? "").ToString().Trim();
+                if (string.IsNullOrEmpty(io)) io = "In";
+                e.Value = io;
                 e.FormattingApplied = true;
-                ApplyAmountCellColor(e, amount);
+                e.CellStyle.Font = new Font("Segoe UI Semibold", 11F, FontStyle.Bold);
+                if (string.Equals(io, "Out", StringComparison.OrdinalIgnoreCase))
+                    e.CellStyle.ForeColor = Color.Red;
+                else
+                    e.CellStyle.ForeColor = Color.LightGreen;
+                return;
+            }
+
+            if (col == "Credit" && e.Value != null && e.Value != DBNull.Value)
+            {
+                if (decimal.TryParse(e.Value.ToString(), out decimal c))
+                {
+                    e.Value = c.ToString("N2");
+                    e.FormattingApplied = true;
+                    e.CellStyle.ForeColor = Color.Red;
+                    e.CellStyle.Font = new Font(guna2DataGridView1.Font, FontStyle.Bold);
+                }
+                return;
+            }
+
+            if (col == "RunningBalance" && e.Value != null && e.Value != DBNull.Value)
+            {
+                if (decimal.TryParse(e.Value.ToString(), out decimal bal))
+                {
+                    e.Value = bal.ToString("N0");
+                    e.FormattingApplied = true;
+                    e.CellStyle.ForeColor = Color.FromArgb(212, 175, 55);
+                    e.CellStyle.Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold);
+                    e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+                }
+                return;
+            }
+
+            if (col == "Amount" && e.Value != null && e.Value != DBNull.Value)
+            {
+                if (decimal.TryParse(e.Value.ToString(), out decimal amount))
+                {
+                    e.Value = amount.ToString("N2");
+                    e.FormattingApplied = true;
+                    ApplyAmountCellColor(e, amount);
+                }
             }
         }
 
@@ -301,14 +515,44 @@ ORDER BY AddStock.Date ASC";
 
         private void guna2DataGridView1_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (guna2DataGridView1.CurrentRow != null)
+            if (e.RowIndex < 0 || guna2DataGridView1.CurrentRow == null) return;
+
+            // Amount / Credit → grid pe seedha edit (form mat kholo) — Daily Diesel jaisa
+            if (e.ColumnIndex >= 0)
             {
-                int id = Convert.ToInt32(guna2DataGridView1.CurrentRow.Cells["Sid"].Value);
-                frmStockAdd frm = new frmStockAdd();
-                frm.id = id;
-                frm.ShowDialog();
-                LoadData1();
+                string col = guna2DataGridView1.Columns[e.ColumnIndex].Name;
+                if (col == "Amount" || col == "Credit")
+                {
+                    try
+                    {
+                        if (IsDealerStockEditableRow(e.RowIndex))
+                        {
+                            guna2DataGridView1.CurrentCell = guna2DataGridView1.Rows[e.RowIndex].Cells[e.ColumnIndex];
+                            guna2DataGridView1.BeginEdit(true);
+                        }
+                    }
+                    catch { }
+                    return;
+                }
             }
+
+            string src = "stock";
+            if (guna2DataGridView1.Columns.Contains("Src") &&
+                guna2DataGridView1.CurrentRow.Cells["Src"].Value != null)
+                src = guna2DataGridView1.CurrentRow.Cells["Src"].Value.ToString();
+
+            int id = Convert.ToInt32(guna2DataGridView1.CurrentRow.Cells["Sid"].Value);
+            if (string.Equals(src, "payout", StringComparison.OrdinalIgnoreCase))
+            {
+                var frm = new frmDieselLedgerAdd(id);
+                frm.ShowDialog();
+            }
+            else
+            {
+                var frm = new frmStockAdd { id = id };
+                frm.ShowDialog();
+            }
+            LoadData1();
         }
 
         private void txtSearch_TextChanged(object sender, EventArgs e)

@@ -27,6 +27,14 @@ namespace ZaibPetroleumService.View
 
         private void ReportAndBackup_Load(object sender, EventArgs e)
         {
+            // Customer to Dealer reports — complete remove
+            try
+            {
+                if (guna2Button1 != null) { guna2Button1.Visible = false; guna2Button1.Enabled = false; }
+                if (guna2Button3 != null) { guna2Button3.Visible = false; guna2Button3.Enabled = false; }
+            }
+            catch { }
+
             var btnPro = new Guna.UI2.WinForms.Guna2Button
             {
                 Text = "Professional Accounting (P&L / Balance / Audit / Roles)",
@@ -103,7 +111,7 @@ namespace ZaibPetroleumService.View
 
         private void guna2Button1_Click(object sender, EventArgs e)
         {
-            ReportWindowHelper.ShowOnce(() => new transctionRdlc());
+            // Customer to Dealer Datewise — removed
         }
 
         private void btnSearch_Click(object sender, EventArgs e)
@@ -124,7 +132,7 @@ namespace ZaibPetroleumService.View
 
         private void guna2Button3_Click(object sender, EventArgs e)
         {
-            ReportWindowHelper.ShowOnce(() => new AttendanceReport());
+            // Customer to Dealer — removed
         }
 
         private void guna2Button4_Click(object sender, EventArgs e)

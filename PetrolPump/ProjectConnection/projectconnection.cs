@@ -17,27 +17,15 @@ namespace ZaibPetroleumService.ProjectConnection
         // Method to return the connection string for SQLite
         public static string conReturn()
         {
-            // Get the path for the SQLite database in the bin folder
-            string binFolderPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DiselPetrolPump.db");
+            string dbFileName = LocalAppStorage.DatabaseFileName;
+            string binFolderPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, dbFileName);
+            string dbFolderPathAppData = LocalAppStorage.GetLocalDataDirectory();
+            string dbFilePath = LocalAppStorage.GetDatabaseFilePath();
 
-            // Get the path for storing the SQLite database in AppData folder
-            string appDataFolder = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string dbFolderPathAppData = Path.Combine(appDataFolder, "DiselPetrolPump");
-
-            // Ensure the directory exists in AppData
-            if (!Directory.Exists(dbFolderPathAppData))
-            {
-                Directory.CreateDirectory(dbFolderPathAppData);  // Create directory if it doesn't exist
-            }
-
-            string dbFilePath = Path.Combine(dbFolderPathAppData, "DiselPetrolPump.db");
-
-            // Ensure the database file exists in AppData folder
             if (!File.Exists(dbFilePath))
             {
                 try
                 {
-                    // If the database does not exist in AppData, copy it from the bin folder
                     if (File.Exists(binFolderPath))
                     {
                         File.Copy(binFolderPath, dbFilePath);
@@ -45,13 +33,13 @@ namespace ZaibPetroleumService.ProjectConnection
                     }
                     else
                     {
-                        // If the database does not exist in bin folder, throw an exception or create a new one
-                        throw new FileNotFoundException("Database file not found in bin folder.");
+                        SQLiteConnection.CreateFile(dbFilePath);
+                        Console.WriteLine("Empty SQLite database created in AppData.");
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("Error copying database file: " + ex.Message);
+                    Console.WriteLine("Error preparing database file: " + ex.Message);
                     throw;
                 }
             }
@@ -69,10 +57,7 @@ namespace ZaibPetroleumService.ProjectConnection
         public static void EnsureSchemaUpdates(string dbFilePath = null)
         {
             if (string.IsNullOrEmpty(dbFilePath))
-            {
-                string appDataFolder = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                dbFilePath = Path.Combine(appDataFolder, "DiselPetrolPump", "DiselPetrolPump.db");
-            }
+                dbFilePath = LocalAppStorage.GetDatabaseFilePath();
 
             if (!File.Exists(dbFilePath))
                 return;

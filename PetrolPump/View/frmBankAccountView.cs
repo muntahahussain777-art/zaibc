@@ -1,4 +1,4 @@
-﻿using Guna.UI2.WinForms;
+using Guna.UI2.WinForms;
 using ZaibPetroleumService;
 using ZaibPetroleumService.ProjectConnection;
 using ZaibPetroleumService.Services;
@@ -45,11 +45,7 @@ namespace DigiKhataApp
         {
             get
             {
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "DiselPetrolPump");
-                if (!Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
+                string dir = LocalAppStorage.GetLocalDataDirectory();
                 return Path.Combine(dir, "LastBankAccount.txt");
             }
         }
@@ -58,12 +54,7 @@ namespace DigiKhataApp
         {
             get
             {
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "DiselPetrolPump");
-                if (!Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-
+                string dir = LocalAppStorage.GetLocalDataDirectory();
                 string file = Path.Combine(dir, "CustomBankNames.txt");
                 string oldFile = Path.Combine(Application.StartupPath, "CustomBankNames.txt");
                 if (!File.Exists(file) && File.Exists(oldFile))
